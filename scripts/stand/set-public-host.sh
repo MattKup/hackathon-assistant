@@ -35,7 +35,9 @@ docker compose -p hackathon-public ps --format '{{.Name}} {{.Image}} {{.Status}}
 echo "== проверка изнутри (пароль не печатается)"
 echo -n "HTTP без пароля: "; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:80/
 echo -n "HTTP с паролем:  "; curl -s -o /dev/null -w '%{http_code}\n' -u "jury:$(cat secret/password)" http://127.0.0.1:80/api/health
+echo -n "HTTP :8090:       "; curl -s -o /dev/null -w '%{http_code}\n' -u "jury:$(cat secret/password)" http://127.0.0.1:8090/api/health
 echo -n "HTTPS с паролем: "; curl -sk -o /dev/null -w '%{http_code}\n' --resolve "$HOST:443:127.0.0.1" -u "jury:$(cat secret/password)" "https://$HOST:443/api/health"
-ss -ltnp 2>/dev/null | grep -E ':(80|443)\b' | awk '{print $1, $4}'
+ss -ltnp 2>/dev/null | grep -E ':(80|443|8090|44435)\b' | awk '{print $1, $4}'
+echo "== фаервол (если доступен без пароля)"; sudo -n ufw status 2>/dev/null | head -12 || echo "ufw: нет доступа без пароля"
 REMOTE
 echo '{"public_host": "'"$HOST_ARG"'", "user": "jury"}' > "$RUN_DIR/metrics.json"
