@@ -56,7 +56,7 @@ def main(corpus_rel, eval_rel, limit=None):
                     ok = ok and len(t1.answers) >= 2
                 row["outcome_ok"] = ok
                 if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
-                    alld = [o["doc_id"] for o in t1.options if o["doc_id"] not in ("*", "?")]
+                    alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
                     t2 = run_turn(q, docs, search, llm, session={"docs": alld, "clarifications": 1})
                     row["turn2_choice"] = "не знаю → все варианты"
                     row["turn2"] = turn_dict(t2)
