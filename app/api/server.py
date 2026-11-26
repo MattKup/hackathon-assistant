@@ -150,7 +150,7 @@ class App:
             hits = self.bm.search(q, k=10, allowed=allowed)
             top = hits[0]["score"] if hits else 1
             return [{**h, "score": round(min(0.99, h["score"] / top), 3)} for h in hits]
-        return self.hy.search(q, k=10, allowed=allowed)[0]
+        return self.hy.search(q, k=16, allowed=allowed)[0]
 
     # --- ход диалога ---
     def ask(self, sid, question, choice=None, employee=""):

@@ -36,7 +36,7 @@ def main(corpus_rel, eval_rel, limit=None):
     tei = TEI(os.environ["TEI_EMBED_URL"], os.environ["TEI_RERANK_URL"])
     hy = Hybrid(windows, tei.embed([w["path"] + "\n" + w["text"] for w in windows]), tei.embed, tei.rerank)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
-    search = lambda q, allowed: hy.search(q, k=10, allowed=allowed)[0]  # noqa: E731
+    search = lambda q, allowed: hy.search(q, k=16, allowed=allowed)[0]  # noqa: E731
     items = [json.loads(l) for l in open(inbox / eval_rel) if l.strip()]
     if limit:
         items = items[: int(limit)]
