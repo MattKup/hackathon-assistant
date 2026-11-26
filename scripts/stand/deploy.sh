@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Задача раннера: развернуть ассистент + Mailpit на pistonvlm (~/hackathon-app), проверить здоровье.
 # Код — из клона решения на коммите задания; корпус — из INBOX_DIR/<папка>. gfreeze-r не трогает.
-# Аргументы: <папка корпуса в INBOX_DIR>
+# Аргументы: <папка корпуса в INBOX_DIR> [<conflicts.json ночного анализатора в INBOX_DIR> — кандидаты в реестр противоречий]
 set -euo pipefail
 CORPUS="$INBOX_DIR/$1"
 H=pistonvlm
@@ -19,6 +19,10 @@ for i in $(seq 1 40); do
   if $SSH "curl -fsS --max-time 3 http://127.0.0.1:19650/api/health" 2>/dev/null; then echo; break; fi
   sleep 3
 done
+if [ -n "${2:-}" ]; then
+  echo "== кандидаты противоречий из отчёта анализатора: $2"
+  $SSH "curl -sS --max-time 120 -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:19650/api/conflicts/import" < "$INBOX_DIR/$2" | tee "$RUN_DIR/conflicts-import.txt"; echo
+fi
 echo "== пробный вопрос"
 $SSH "curl -fsS --max-time 60 -H 'Content-Type: application/json' -d '{\"question\":\"ДБРЦТ: кто создаёт заявку на пресейл?\"}' http://127.0.0.1:19650/api/ask" | python3 -c "
 import json,sys; r=json.load(sys.stdin); print('outcome:', r['outcome'], 'seconds:', r['seconds']); print(json.dumps(r['answers'][:1], ensure_ascii=False)[:600])" | tee "$RUN_DIR/probe.txt"

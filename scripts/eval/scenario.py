@@ -72,6 +72,26 @@ if r13.get("outcome") == "ask" and r13.get("options"):
     step("14. сотрудник выбирает первый вариант", call("/api/ask", {"session": "s6", "question": "", "choice": r13["options"][0]["id"]}))
 step("15. размытый вопрос", call("/api/ask", {"session": "s7", "question": "А что со сроками?"}))
 step("12. вне регламентов", call("/api/ask", {"session": "s5", "question": "Какую маржу поставить по моей сделке?"}))
+# 16–19. противоречия: кандидаты → служба качества подтверждает пару → ответ с двумя пунктами → вернуть на решение
+pairs = call("/api/conflicts")
+print("== 16. реестр противоречий: кандидатов", sum(1 for x in pairs if x.get("status") == "candidate"),
+      "подтверждено", sum(1 for x in pairs if x.get("status") == "confirmed"))
+pair = next((x for x in pairs if x.get("department") == "DBRCT" and {x.get("clause_a"), x.get("clause_b")} >= {"8.4", "8.5"}), None)
+if pair:
+    was = pair["status"]
+    step("17. служба качества подтверждает ДБРЦТ 8.4↔8.5", call("/api/conflicts/decide", {"pair_id": pair["pair_id"], "decision": "confirm", "who": "сценарий", "comment": "проверка сценария"}))
+    step("18. сотрудник: старт без договора по гарантийному письму (ДБРЦТ)", call("/api/ask", {"session": "s8", "question": "ДБРЦТ: работы без подписанного договора и сметы — гарантийное письмо заказчика является исключением?", "employee": "sidorov@example.test"}))
+    if was != "confirmed":
+        step("19. вернуть пару на решение (подтверждает владелец на видео)", call("/api/conflicts/decide", {"pair_id": pair["pair_id"], "decision": "reopen"}))
+else:
+    print("   пара ДБРЦТ 8.4↔8.5 среди кандидатов не найдена")
+# 20. повторы: тот же вопрос без ответа другими словами от разных сотрудников → сигнал службе качества
+for i, q in enumerate(["Сколько лет хранить проектную документацию после закрытия проекта?",
+                       "Как долго нужно хранить документы проекта после перевода в архив?"]):
+    call("/api/ask", {"session": f"r{i}", "question": q, "employee": f"r{i}@example.test"})
+    call("/api/escalate", {"session": f"r{i}"})
+time.sleep(5)
+print("== 20. повторяющиеся вопросы:", json.dumps((call("/api/analytics").get("repeats") or {}), ensure_ascii=False)[:600])
 out = subprocess.run(SSH + ["curl -sS http://127.0.0.1:19652/api/v1/messages?limit=10"], capture_output=True, timeout=60)
 mails = json.loads(out.stdout or b"{}").get("messages", [])
 print("== письма в имитации почты (Mailpit)")
