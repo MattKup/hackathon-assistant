@@ -141,3 +141,15 @@ class PermitBanTest(unittest.TestCase):
         raw = {"verdict": "answer", "summary": "Да, бюджетная оценка может использоваться для подачи в RFI.", "caveat": "", "missing": "",
                "steps": [{"text": "Для RFI можно", "who": "", "deadline": "", "ref": "w1", "quote": "Бюджетная оценка не может использоваться для подачи в конкурс"}]}
         self.assertEqual(check(raw, w, "Можно ли бюджетную оценку в RFI?")["verdict"], "answer")
+
+
+class DocAbbrTest(unittest.TestCase):
+    """Г12: расшифровки сокращений — из текста документов, по первым буквам; глоссарий организаторов не используется."""
+    def test_extract(self):
+        from app.answer.core import extract_abbr
+        ws = [{"text": "Ожидает ответа от SS (Менеджера по продаже решений). Назначение руководителя проекта (РП) — в течение дня."},
+              {"text": "SS (Менеджер по продаже решений) направляет КП. Если при запросе расчёта (РТЗ) нет данных."}]
+        a = extract_abbr(ws)
+        self.assertIn("продаже решений", a["SS"])
+        self.assertEqual(a["РП"], "Руководителя проекта")
+        self.assertNotIn("РТЗ", a)

@@ -238,6 +238,8 @@ def build_index(windows):
     idx = {}
     for w in windows:
         idx.setdefault((w.get("doc_id"), w.get("clause")), w)
+    import app.answer.core as _core                 # Г12: расшифровки сокращений из текста документов
+    _core.DOC_ABBR = _core.extract_abbr(windows)
     return idx
 
 

@@ -274,7 +274,56 @@ def check(raw, windows, question=""):
     return out
 
 
+DOC_ABBR = {}     # сокращение → расшифровка из ТЕКСТА документов (заполняет pipeline.build_index при сборке индекса)
+_AB = r"[A-ZА-ЯЁ]{2,6}"
+_NAME = r"[А-ЯЁ][а-яё]+(?:[\s-]+[а-яё]+){0,5}"
+ABBR_PATTERNS = (re.compile(rf"(?<![\w])({_AB})\s*\(\s*({_NAME})\s*\)"),          # SS (Менеджер по продаже решений)
+                 re.compile(rf"({_NAME})\s*\(\s*({_AB})\s*\)"))                    # Руководитель проекта (РП)
+
+
+def extract_abbr(windows):
+    """Г12: сокращения и их расшифровки — только как они записаны в тексте документов (не глоссарий: у организаторов
+    SS = «Solution Sales», а в регламентах — «Менеджер по продаже решений»). При нескольких — самая частая."""
+    from collections import Counter
+
+    def fit(ab, name):
+        """Кириллическое сокращение — по первым буквам слов расшифровки (конец фразы): «Назначение руководителя проекта (РП)» →
+        «руководителя проекта». Латинское — без проверки букв, но только в виде «SS (Менеджер …)»."""
+        words = re.findall(r"[А-Яа-яЁё]+", name)
+        if not re.match(r"[А-ЯЁ]", ab):
+            return name
+        lw = [x for x in words if len(x) > 2]           # «по», «и» — не дают букв сокращения
+        for i in range(len(words)):
+            tail = words[i:]
+            ini = "".join(x[0] for x in tail if len(x) > 2).upper()
+            if ini == ab.upper():
+                out = " ".join(tail)
+                return out[0].upper() + out[1:]
+        return None if lw else None
+    cnt = {}
+    for w in windows:
+        t = w.get("text", "")
+        for m in ABBR_PATTERNS[0].finditer(t):
+            n = fit(m.group(1), m.group(2).strip())
+            if n:
+                cnt.setdefault(m.group(1), Counter())[n] += 1
+        for m in ABBR_PATTERNS[1].finditer(t):
+            n = fit(m.group(2), m.group(1).strip())
+            if n:
+                cnt.setdefault(m.group(2), Counter())[n] += 1
+    return {k: c.most_common(1)[0][0] for k, c in cnt.items()}
+
+
+def abbr_note(windows):
+    text = " ".join(w.get("text", "") for w in windows)
+    found = [f"{k} — {v}" for k, v in DOC_ABBR.items() if re.search(rf"(?<![\wА-Яа-яЁё]){re.escape(k)}(?![\wА-Яа-яЁё])", text)]
+    return ("\nСокращения в этих фрагментах (расшифровки из текста документов): " + "; ".join(found[:20])) if found else ""
+
+
 def answer(llm, question, windows, dept_label, terms="", thinking=False):
     kw = {"thinking": True} if thinking else {}
-    raw, meta = llm.chat_json(SYSTEM, build_user(question, windows, dept_label, terms), SCHEMA, **kw)
+    user = build_user(question, windows, dept_label, terms)
+    if "G12" in set(_os.environ.get("HK_ON", "").split(",")):
+        user += abbr_note(windows)
+    raw, meta = llm.chat_json(SYSTEM, user, SCHEMA, **kw)
     return check(raw, windows, question), meta
