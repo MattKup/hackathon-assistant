@@ -163,8 +163,19 @@ def make_handler(app):
             self.wfile.write(body)
 
         def _body(self):
-            n = int(self.headers.get("Content-Length") or 0)
-            return json.loads(self.rfile.read(n) or b"{}")
+            if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+                raw = b""
+                while True:
+                    size = int(self.rfile.readline().strip() or b"0", 16)
+                    if not size:
+                        self.rfile.readline()
+                        break
+                    raw += self.rfile.read(size)
+                    self.rfile.readline()
+            else:
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self._raw = raw
+            return json.loads(raw or b"{}")
 
         def log_message(self, *a):
             pass
@@ -191,7 +202,8 @@ def make_handler(app):
             try:
                 b = self._body()
             except ValueError:
-                return self._json(400, {"error": "тело запроса — не JSON"})
+                return self._json(400, {"error": "тело запроса — не JSON", "head": repr(getattr(self, "_raw", b"")[:120]),
+                                        "headers": {k: v for k, v in self.headers.items() if k.lower() in ("content-length", "transfer-encoding", "content-type")}})
             try:
                 if self.path == "/api/ask":
                     sid = b.get("session") or uuid.uuid4().hex
