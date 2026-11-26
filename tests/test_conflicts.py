@@ -110,6 +110,14 @@ class ConflictsTest(unittest.TestCase):
         rep, _ = self.run_an(ws, swap)
         self.assertEqual(len([f for f in rep["findings"] if f["kind"] == "contradiction"]), 1)
 
+    def test_quote_with_ellipsis(self):
+        text = "10.1. После подписания договора (или исключения) РП создаёт проект в системе управления проектами."
+        q, _ = C.verify_quote("После подписания договора ... РП создаёт проект в системе управления проектами", text)
+        self.assertIsNotNone(q)
+        fixed, repaired = C.verify_quote("РП создаёт проект ... После подписания договора", text)
+        self.assertTrue(repaired)                     # порядок нарушен → заменена предложением источника
+        self.assertIn(C.norm(fixed), C.norm(text))
+
     def test_number_not_in_source_rejected(self):
         def wrong_num(a, b):
             r = deadline_judge(a, b)

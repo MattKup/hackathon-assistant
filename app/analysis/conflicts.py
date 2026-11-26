@@ -486,6 +486,16 @@ def verify_quote(q, text):
         return None, False
     if norm(q) in norm(text):
         return q.strip(), False
+    frags = [f for f in re.split(r"\s*(?:\.\.\.|…)\s*", q) if f.strip()]
+    if len(frags) > 1:                                   # цитата с пропуском: каждый кусок дословно и по порядку
+        nt, pos = norm(text), 0
+        for f in frags:
+            i = nt.find(norm(f), pos)
+            if i < 0 or len(re.findall(r"\w+", f)) < 2:
+                break
+            pos = i + len(norm(f))
+        else:
+            return q.strip(), False
     fixed = repair_quote(q, text)
     if fixed and norm(fixed) in norm(text):
         return fixed, True
