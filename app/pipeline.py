@@ -363,10 +363,13 @@ def strip_departments(question, registry=()):
 
 
 def route_for(question):
+    """Куда обратиться с вопросом вне регламентов — правила из config/documents.json «routes» (судья: 9 расхождений с эталоном)."""
+    from app.config import cfg
     q = question.lower()
-    if re.search(r"марж|преми|бонус|kpi|зарплат", q):
-        return {"to": "ваш руководитель", "why": "вопросы мотивации и экономики сделки не описаны в регламентах"}
-    return {"to": "служба качества", "why": "вопрос не относится к регламентам проектной деятельности"}
+    for r in cfg().get("routes") or []:
+        if re.search(r["match"], q, re.I):
+            return {"to": r["to"], "why": r.get("why", "")}
+    return {"to": "ваш руководитель", "why": "вопрос не относится к регламентам проектной деятельности"}
 
 
 def _docs_for(depts, stage, registry):

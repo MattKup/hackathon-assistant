@@ -115,3 +115,28 @@ class SynonymTest(unittest.TestCase):
              "quote": "не менее чем за 3 рабочих дня до подачи предложения"}]}
         out = check(raw, W, "За сколько подавать заявку?")
         self.assertNotIn("5", out["summary"])
+
+
+class PermitBanTest(unittest.TestCase):
+    """Судья: q145 «Да, можете быть ГИП…» при запрете в пункте → оговорка с цитатой запрета; исключение «за исключением RFI» — не запрет."""
+    W = [{**W[0], "clause": "5.1.3.3", "text": "5.1.3.3. Если сотрудник является единственным исполнителем по одной из тем проекта, то он не может быть назначен ГИП."}]
+
+    def raw(self, summary):
+        return {"verdict": "answer", "summary": summary, "caveat": "", "missing": "", "steps": [
+            {"text": "ГИП назначает руководитель", "who": "", "deadline": "", "ref": "w1",
+             "quote": "является единственным исполнителем по одной из тем проекта"}]}
+
+    def test_permit_vs_ban_downgraded(self):
+        out = check(self.raw("Да, вы можете быть ГИП по другой теме, если не являетесь единственным исполнителем по ней."), self.W, "Могу ли я быть ГИП?")
+        self.assertEqual(out["verdict"], "answer_with_caveat")
+        self.assertIn("не может быть назначен ГИП", out["caveat"])
+
+    def test_negative_answer_not_touched(self):
+        out = check(self.raw("Нет, вы не можете быть ГИП по теме, где вы единственный исполнитель."), self.W, "Могу ли я быть ГИП?")
+        self.assertEqual(out["verdict"], "answer")
+
+    def test_exception_named_not_ban(self):
+        w = [{**W[0], "clause": "2.4", "text": "2.4. Бюджетная оценка не может использоваться для подачи в конкурс (за исключением RFI)."}]
+        raw = {"verdict": "answer", "summary": "Да, бюджетная оценка может использоваться для подачи в RFI.", "caveat": "", "missing": "",
+               "steps": [{"text": "Для RFI можно", "who": "", "deadline": "", "ref": "w1", "quote": "Бюджетная оценка не может использоваться для подачи в конкурс"}]}
+        self.assertEqual(check(raw, w, "Можно ли бюджетную оценку в RFI?")["verdict"], "answer")

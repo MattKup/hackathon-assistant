@@ -159,6 +159,22 @@ def added_from_question(step_text, window_text, question):
     return sorted((stems(step_text) & stems(question)) - stems(window_text) - ok)
 
 
+PERMIT = re.compile(r"^\s*(да|можно|можете|допускается|разрешено)\b|(?<!не\s)\b(можете|можно|допускается|разрешается)\b", re.I)
+EXCEPT = re.compile(r"за\s+исключением\s+([^),.;]+)|кроме\s+([^),.;]+)|исключени\w*\s+(?:является|—|-)?\s*([^),.;]+)", re.I)
+
+
+def _ban_applies(summary, ban):
+    """Запрет по той же теме (≥ 2 общих основ) и не снят исключением, которое ответ называет («за исключением RFI»)."""
+    if len(stems(summary) & stems(ban)) < 2:
+        return False
+    for m in EXCEPT.finditer(ban):
+        exc = next(g for g in m.groups() if g)
+        if stems(exc) & stems(summary) or any(w in summary for w in re.findall(r"\b[A-ZА-ЯЁ]{2,}\b", exc)):
+            return False
+    return True
+BAN = re.compile(r"запрещ|не\s+допуска|не\s+может\b|не\s+могут\b|не\s+вправе|нельзя|не\s+разреша", re.I)
+
+
 def check(raw, windows, question=""):
     q = question.split("\n\n")[0]
     out = {**raw, "steps": [], "rejected": []}
@@ -204,6 +220,13 @@ def check(raw, windows, question=""):
             out["summary"] = " ".join(st["text"] for st in out["steps"][:2])
         if out.get("caveat") and set(NUM.findall(out["caveat"])) - src:
             out["caveat"] = " ".join(x for x in _sentences(out["caveat"]) if not (set(NUM.findall(x)) - src))
+    # разрешение в ответе при запрете в процитированном пункте → оговорка с цитатой запрета (судья: q145 «Да, можете…»)
+    if out["steps"] and out.get("verdict") == "answer" and PERMIT.search(out.get("summary", "")):
+        bans = [x for st in out["steps"] for x in _sentences(st["source_text"]) if BAN.search(x) and _ban_applies(out["summary"], x)]
+        if bans:
+            out["verdict"] = "answer_with_caveat"
+            out["caveat"] = ((out.get("caveat") or "") + f" В пункте есть запрет: «{bans[0].strip()[:220]}» — проверьте, не относится ли он к вашему случаю.").strip()
+            out["permit_vs_ban"] = True
     if raw.get("verdict") in ("answer", "answer_with_caveat", "conflict") and raw.get("steps") and not out["steps"]:
         out["verdict"] = "no_answer"
         out["downgraded"] = "все шаги без проверенной опоры"
