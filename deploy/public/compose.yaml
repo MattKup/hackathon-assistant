@@ -1,0 +1,13 @@
+# Внешний адрес стенда: Caddy с паролем перед ассистентом (127.0.0.1:19650). Отдельный проект compose —
+# развёртывания ассистента (deploy.sh, --remove-orphans) его не трогают. Mailpit наружу не публикуется.
+# Версия зафиксирована: Caddy v2.11.9 (GitHub Latest, 05.11.2026), тег Docker Hub 2.11.9-alpine.
+name: hackathon-public
+services:
+  caddy:
+    image: caddy:2.11.9-alpine
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data:/data
+      - ./config:/config
