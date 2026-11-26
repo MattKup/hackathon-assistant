@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "steps", "caveat", "missing"],
+  "properties": {
+    "verdict": {"enum": ["answer", "answer_with_caveat", "no_answer", "conflict"]},
+    "summary": {"type": "string", "maxLength": 600},
+    "steps": {"type": "array", "maxItems": 7, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["text", "who", "deadline", "ref", "quote"],
+      "properties": {
+        "text": {"type": "string", "maxLength": 260},
+        "who": {"type": "string", "maxLength": 80},
+        "deadline": {"type": "string", "maxLength": 80},
+        "ref": {"type": "string", "pattern": "^w[0-9]+$"},
+        "quote": {"type": "string", "maxLength": 300}}}},
+    "caveat": {"type": "string", "maxLength": 400},
+    "missing": {"type": "string", "maxLength": 300}
+  }
+}
