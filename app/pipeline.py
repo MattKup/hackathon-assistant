@@ -164,6 +164,78 @@ def answers_same(llm, question, answered):
         return False, ""
 
 
+DEEP_SUPPORT = 0.5         # «нет ответа» при опоре не слабее — повод копнуть глубже (судья: q085, q094, q122)
+REF_RE = re.compile(r"(?:п\.|пункт\w*|пп\.)\s*(\d+(?:\.\d+)+)", re.I)
+VERDICT_RANK = {"answer": 3, "conflict": 2, "answer_with_caveat": 2, "no_answer": 0}
+
+
+def build_index(windows):
+    """(подразделение, пункт) → окно — для агентного прохода: пункт по ссылке «п. X.Y» и соседние пункты."""
+    idx = {}
+    for w in windows:
+        idx.setdefault((w.get("department"), w.get("clause")), w)
+    return idx
+
+
+def _neighbors(clause):
+    parts = clause.split(".")
+    out = []
+    try:
+        last = int(parts[-1])
+    except ValueError:
+        return out
+    for d in (-1, 1):
+        if last + d > 0:
+            out.append(".".join(parts[:-1] + [str(last + d)]))
+    if len(parts) > 2:
+        out.append(".".join(parts[:-1]))
+    return out
+
+
+def needs_deep(res, support):
+    if res["verdict"] == "answer_with_caveat" and (res.get("missing") or "").strip():
+        return "в ответе не хватает: " + res["missing"].strip()[:120]
+    if res["verdict"] == "no_answer" and support >= DEEP_SUPPORT:
+        return "пункты по теме нашлись, а ответа нет"
+    return ""
+
+
+def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index, answer_cache, why):
+    """Агентный проход (идея владельца 26.11: слабые ответы — сразу через агента): добрать пункты, на которые ссылается
+    текст, соседние пункты и пункты по недостающему, ответить второй раз и оставить лучший ответ."""
+    have = {w["window_id"] for w in ws}
+    extra = []
+    cited = [st.get("clause") for st in res.get("steps", [])] or [w["clause"] for w in ws[:3]]
+    for w in ws[:8]:
+        for c in REF_RE.findall(w.get("text", "")):
+            x = index.get((dep, c)) if index else None
+            if x and x["window_id"] not in have:
+                extra.append({**x, "score": w.get("score", 0) * 0.9, "via": f"ссылка из п. {w['clause']}"})
+    for c in cited:
+        for n in _neighbors(c or ""):
+            x = index.get((dep, n)) if index else None
+            if x and x["window_id"] not in have:
+                extra.append({**x, "score": 0.5, "via": f"соседний к п. {c}"})
+    miss = (res.get("missing") or "").strip()
+    if miss and docs:
+        for h in _search(search_fn, miss, set(docs), 6):
+            if h["window_id"] not in have:
+                extra.append({**h, "via": "по недостающему"})
+    uniq = {}
+    for w in extra:
+        uniq.setdefault(w["window_id"], w)
+    extra = list(uniq.values())
+    if not extra:
+        return None
+    base = {"department_name": ws[0]["department_name"], "doc_title": ws[0]["doc_title"]} if ws else {}
+    extra = [{**base, **w, "doc_title": w.get("doc_title") or base.get("doc_title", "")} for w in extra]
+    ws2 = budget(sorted(ws + extra, key=lambda w: -w.get("score", 0)), max_windows=PER_DEPT + 6)
+    ws2 = fit_tokens(llm, question, ws2, label_)
+    res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache)
+    better = (VERDICT_RANK.get(res2["verdict"], 0), len(res2.get("steps", []))) > (VERDICT_RANK.get(res["verdict"], 0), len(res.get("steps", [])))
+    return {"res": res2, "meta": meta2, "ws": ws2, "better": better, "added": len(extra), "why": why}
+
+
 def outcome_of(results):
     verdicts = [r["result"]["verdict"] for r in results]
     return "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
@@ -309,17 +381,18 @@ def _docs_for(depts, stage, registry):
     return out
 
 
-def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None, conflicts=None):
+def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None, conflicts=None, index=None):
     """search_fn(query, allowed) -> hits (score реранкера).
     session (мутируется): docs, clarifications, no_clarify, complex; cache — ответы по дирекциям до выбора;
     ask — открытый уточняющий вопрос (условие или тема); ask_reply — ответ сотрудника на него."""
     session = {} if session is None else session
     c = Counted(llm)
-    session["_conflicts"] = conflicts
+    session["_conflicts"], session["_index"] = conflicts, index
     t = _run_turn(question, registry, search_fn, c, session, workers, answer_cache)
     t.question = t.question or session.get("_effective_q") or question
     session.pop("_effective_q", None)
     session.pop("_conflicts", None)
+    session.pop("_index", None)
     t.tokens = c.t
     return t
 
@@ -566,6 +639,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     # (2) комплексный проект: каждая дирекция отвечает за свою часть
     complex_ = len(depts) >= 2 and (session.get("complex") or len({by_id[d]["department"] for d in named}) >= 2)
 
+    index = session.get("_index")
     # 4. ответ по каждой дирекции — параллельно; контекст — по бюджету в знаках (решение 24.11: ≈ 21 тыс. знаков),
     #    а не по числу окон: на PDF окна до 2 400 знаков, 18 окон переполнили бы контекст модели
     def one(dep):
@@ -584,6 +658,18 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             res = {"verdict": "no_answer", "summary": "", "steps": [], "rejected": [], "caveat": "",
                    "missing": "ответ не получен из-за сбоя модели", "error": str(e)[:120]}
             meta = {"error": str(e)[:120]}
+        why = needs_deep(res, dept_best.get(dep, 0)) if not session.get("no_deep") else ""
+        if why:
+            try:
+                d = deep_pass(llm, q, dep, names.get(dep, dep), ws, res, meta, search_fn,
+                              [x for x in deep if by_id[x]["department"] == dep], index, answer_cache, why)
+            except Exception as e:
+                d, meta["deep_error"] = None, str(e)[:120]
+            if d:
+                meta["deep"] = {"why": why, "added": d["added"], "better": d["better"], "verdict2": d["res"]["verdict"]}
+                if d["better"]:
+                    res, ws = d["res"], d["ws"]
+                    meta.update({k: v for k, v in d["meta"].items() if k in ("prompt_tokens", "completion_tokens")})
         meta["clauses_seen"] = [w["clause"] for w in ws]
         meta["context_chars"] = sum(len(w["text"]) for w in ws)
         return {"doc_id": dep, "label": names.get(dep, dep), "result": res, "meta": meta, "windows": ws}
@@ -594,6 +680,10 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         verdict = {"answer": "ответ", "answer_with_caveat": "ответ с оговоркой", "conflict": "противоречие",
                    "no_answer": "прямого ответа нет"}.get(res["verdict"], res["verdict"])
         n, rej = len(res["steps"]), len(res["rejected"])
+        dp = r["meta"].get("deep")
+        if dp:
+            tr.append(f"{r['label']}: копнул глубже ({dp['why']}) — добавил {dp['added']} "
+                      f"{plural(dp['added'], 'пункт', 'пункта', 'пунктов')}" + (", ответ стал полнее" if dp["better"] else ", первый ответ оставлен"))
         tr.append(f"{r['label']}: {verdict}" + (f", {n} {plural(n, 'шаг', 'шага', 'шагов')} со ссылками на пункты" if n else "")
                   + (f"; {rej} {plural(rej, 'утверждение отброшено', 'утверждения отброшены', 'утверждений отброшено')} проверкой цитат" if rej else "; все цитаты сверены с текстом"))
         r["meta"]["trace_debug"] = f"пункты в контексте: {', '.join(r['meta'].get('clauses_seen', []))}"

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from app.answer.llm import LLM  # noqa: E402
-from app.pipeline import load_conflicts, run_turn  # noqa: E402
+from app.pipeline import build_index, load_conflicts, run_turn  # noqa: E402
 from app.registry.build import run as build_registry  # noqa: E402
 from app.search.hybrid import Hybrid  # noqa: E402
 from app.search.tei import TEI  # noqa: E402
@@ -60,7 +60,7 @@ def main(corpus_rel, eval_rel, *rest):
     hy = Hybrid(windows, tei.embed([w["path"] + "\n" + w["text"] for w in windows]), tei.embed, tei.rerank)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
     search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
-    conflicts = load_conflicts(windows)
+    conflicts, index = load_conflicts(windows), build_index(windows)
     items = [json.loads(l) for l in open(inbox / eval_rel) if l.strip()]
     if limit:
         items = items[: int(limit)]
@@ -72,7 +72,7 @@ def main(corpus_rel, eval_rel, *rest):
             t0 = time.time()
             try:
                 sess = {"no_clarify": no_clarify}
-                t1 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts)
+                t1 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
                 row = {"id": e["id"], "class": e["class"], "question": q, "turn1": turn_dict(t1)}
                 exp = e["expected"]["outcome"]
                 ok = t1.outcome in EXPECT.get(exp, {exp})
@@ -92,7 +92,7 @@ def main(corpus_rel, eval_rel, *rest):
                     # для остальных — второй ход с первым вариантом, засчитывается по его исходу (отдельно считаем asked)
                     row["asked"] = [o["label"] for o in t1.options]
                     sess["ask_reply"] = t1.options[0]["label"]
-                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts)
+                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
                     row["turn2_choice"], row["turn2"] = t1.options[0]["label"], turn_dict(t2)
                     ok = exp in ("clarify", "compare_all") or t2.outcome in EXPECT.get(exp, {exp})
                     tok2 = t2.tokens
@@ -101,7 +101,7 @@ def main(corpus_rel, eval_rel, *rest):
                 if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
                     alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
                     sess.update(docs=alld, clarifications=1)
-                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts)
+                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
                     t1.tokens = {k: t1.tokens.get(k, 0) + t2.tokens.get(k, 0) for k in t1.tokens}
                     row["turn2_choice"] = "не знаю → все варианты"
                     row["turn2"] = turn_dict(t2)
@@ -109,7 +109,7 @@ def main(corpus_rel, eval_rel, *rest):
                 elif t1.outcome == "clarify" and e["expected"].get("clarify_options"):
                     dep = e["expected"]["clarify_options"][0]
                     sess.update(docs=dept_doc.get(dep, []), clarifications=1)
-                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts)
+                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
                     t1.tokens = {k: t1.tokens.get(k, 0) + t2.tokens.get(k, 0) for k in t1.tokens}
                     row["turn2_choice"] = dep
                     row["turn2"] = turn_dict(t2)
@@ -120,6 +120,9 @@ def main(corpus_rel, eval_rel, *rest):
                 for k, v in t1.tokens.items():
                     stats["tok_" + k] += v
                 stats["asked"] += 1 if row.get("asked") else 0
+                dps = [a["meta"].get("deep") for a in (row.get("turn2") or row["turn1"])["answers"] if a["meta"].get("deep")]
+                stats["deep"] += len(dps)
+                stats["deep_better"] += sum(1 for d in dps if d["better"])
                 stats["auto_mail"] += 1 if (t1.route or {}).get("email") and t1.outcome != "escalate" else 0
             except Exception as ex:  # сбой одного вопроса не останавливает прогон
                 row = {"id": e["id"], "class": e["class"], "question": q, "error": str(ex)[:300], "outcome_ok": False}
@@ -141,7 +144,7 @@ def main(corpus_rel, eval_rel, *rest):
                                if pc0 and pc1 else None),
          "mode": "no_clarify" if no_clarify else "clarify", "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
-         "asked": stats["asked"], "auto_mail_not_covered": stats["auto_mail"],
+         "asked": stats["asked"], "deep_passes": stats["deep"], "deep_better": stats["deep_better"], "auto_mail_not_covered": stats["auto_mail"],
          "tokens_total": {k[4:]: stats[k] for k in stats if k.startswith("tok_")},
          "tokens_per_question": {k[4:]: round(stats[k] / max(1, len(items))) for k in stats if k.startswith("tok_")},
          "by_class": {c: f"{by_class[(c, True)]}/{by_class[(c, True)] + by_class[(c, False)]}" for c in classes},

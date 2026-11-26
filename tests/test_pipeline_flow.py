@@ -308,3 +308,30 @@ class SameAcrossTest(unittest.TestCase):
         llm = self.SameLLM(False, {"Техническая дирекция": "answer", "ДБРЦТ": "answer"})
         t = run_turn("За сколько подавать заявку на расчёт?", REG, search_for(WINS), llm, session={})
         self.assertEqual(t.outcome, "clarify")
+
+
+class DeepPassTest(unittest.TestCase):
+    """Агентный проход: ответ с оговоркой и «не хватает…» → добираем пункт по ссылке и соседний, отвечаем снова."""
+
+    class DeepLLM(FakeLLM):
+        def chat_json(self, system, user, schema, max_tokens=1500):
+            if "Подразделение:" in user and "АМ направляет" not in user:   # первый проход: пункта 8.5 в контексте нет
+                self.calls.append(("ДБРЦТ", user))
+                text = re.search(r"\[w1\][^\n]*\n(.+)", user).group(1)
+                return {"verdict": "answer_with_caveat", "summary": "частично", "caveat": "не всё", "missing": "порядок без письма",
+                        "case_covered": True, "ask": "", "ask_options": [],
+                        "steps": [{"text": "шаг", "who": "", "deadline": "", "ref": "w1", "quote": text[:40]}]}, {}
+            return super().chat_json(system, user, schema, max_tokens)
+
+    def test_deep_pass_adds_referenced_and_neighbor_clauses(self):
+        from app.pipeline import build_index
+        w84 = win("dbr", "8.4", "Работы без договора запрещены, кроме случая по п. 8.5 настоящего регламента.", 0.9)
+        w85 = win("dbr", "8.5", "Без гарантийного письма АМ направляет запрос на старт.", 0.1)
+        idx = build_index([w84, w85])
+        llm = self.DeepLLM({"ДБРЦТ": "answer"})
+        t = run_turn("ДБРЦТ: можно стартовать без договора?", REG, search_for([w84]), llm, session={}, index=idx)
+        a = t.answers[0]
+        self.assertEqual(a["meta"]["deep"]["added"] >= 1, True)
+        self.assertTrue(a["meta"]["deep"]["better"])
+        self.assertEqual(a["result"]["verdict"], "answer")
+        self.assertTrue(any("копнул глубже" in x for x in t.trace))

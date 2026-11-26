@@ -21,7 +21,7 @@ from app.escalation import mail
 from app.escalation.process import practice_windows, process_replies
 from app.escalation.store import Store
 from app.ingest.upload import Uploads, parse_multipart
-from app.pipeline import load_conflicts, run_turn
+from app.pipeline import build_index, load_conflicts, run_turn
 from app.registry.build import run as build_registry
 from app.search.bm25 import BM25
 from app.search.vectors import VectorStore
@@ -207,8 +207,9 @@ class App:
         t0 = time.time()
         if getattr(self, "conflicts", None) is None:
             self.conflicts = load_conflicts(self.windows)          # реестр подтверждённых противоречий
+            self.index = build_index(self.windows)                  # пункты по номеру — для агентного прохода
         turn = run_turn(q, self.registry, self.search, self.llm, session=s, answer_cache=self.answer_cache,
-                        conflicts=self.conflicts)   # s хранит кэш ответов по дирекциям для второго хода
+                        conflicts=self.conflicts, index=self.index)   # s хранит кэш ответов по дирекциям для второго хода
         out = {"outcome": turn.outcome, "text": turn.text, "tokens": turn.tokens, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
                "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": []}
