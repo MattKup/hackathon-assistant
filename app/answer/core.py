@@ -45,6 +45,76 @@ def repair_quote(quote, text, min_overlap=0.8):
     return best if score >= min_overlap else None
 
 
+ROOT = Path(__file__).resolve().parents[2]
+GARBLED = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")   # иероглифы/кана/хангыль — сбой генерации (v7 q026)
+
+
+def _entities():
+    """Роли и сокращения для проверки «роль из шага есть в пункте» (универсально: из конфигурации, не из кода)."""
+    abbr, roles, groups = [], [], {}
+    try:
+        syn = json.loads((ROOT / "config" / "synonyms.json").read_text())
+        for k, v in (syn.get("abbreviations") or {}).items():
+            names = [x.strip() for x in k.split(",") if x.strip()]
+            exp = (v.get("expansions") if isinstance(v, dict) else v) or []
+            abbr += names
+            for n in names + list(exp):            # «РП» = «Руководитель проекта»: одно и то же
+                groups.setdefault(n, set()).update(names + list(exp))
+    except (OSError, ValueError):
+        pass
+    try:
+        roles = json.loads((ROOT / "config" / "documents.json").read_text()).get("roles") or []
+    except (OSError, ValueError):
+        pass
+    return abbr, roles, groups
+
+
+ABBR, ROLES, GROUPS = _entities()
+
+
+def _has_abbr(a, text):
+    return re.search(r"(?<![\wА-Яа-яЁё])" + re.escape(a) + r"(?![\wА-Яа-яЁё])", text) is not None
+
+
+def _role_re(role):
+    """Фраза роли подряд, по основам слов: «Руководитель проекта» ≠ «Руководитель отдела управления проектами»."""
+    words = [w for w in re.findall(r"[а-яё]+", norm(role)) if len(w) > 2]
+    return re.compile(r"(?<![а-яё])" + r"[а-яё]*(?:[\s-]+[а-яё]{1,2})?[\s-]+".join(re.escape(w[:5]) for w in words) + r"[а-яё]*") if words else None
+
+
+def _has_role(role, text):
+    r = _role_re(role)
+    return bool(r and r.search(norm(text)))
+
+
+def _present(name, text):
+    for n in GROUPS.get(name, {name}) | {name}:
+        if (_has_abbr(n, text) if n.isupper() or len(n) <= 4 else _has_role(n, text)):
+            return True
+    return False
+
+
+def foreign_entities(step_text, window_text, question=""):
+    """Роли/сокращения, которые модель назвала в шаге, а в пункте (и в вопросе) их нет — с учётом расшифровок
+    («РП» = «Руководитель проекта»). v7: «Руководитель отдела УП», «Менеджер по качеству», ТКП вместо КП.
+    Длинные названия проверяются первыми и вырезаются, чтобы «Архитектор» не срабатывал внутри «Пресейл-архитектор»."""
+    names = sorted(set(ABBR) | set(ROLES) | {n for g in GROUPS.values() for n in g}, key=len, reverse=True)
+    rest, out = step_text, []
+    for n in names:
+        short = n.isupper() or len(n) <= 4
+        found = _has_abbr(n, rest) if short else _has_role(n, rest)
+        if not found:
+            continue
+        if not _present(n, window_text) and not _present(n, question):
+            out.append(n)
+        if short:
+            rest = re.sub(r"(?<![\wА-Яа-яЁё])" + re.escape(n) + r"(?![\wА-Яа-яЁё])", " ", rest)
+        else:
+            r = _role_re(n)
+            rest = r.sub(" ", norm(rest)) if r else rest
+    return out
+
+
 STOP = {"можно", "нужно", "какой", "какие", "какая", "каким", "когда", "сколько", "который", "проект", "проекта",
         "работы", "работ", "заказчика", "договора", "дирекции", "дирекция", "регламент", "регламенте", "если"}
 
@@ -81,6 +151,12 @@ def check(raw, windows, question=""):
                     reason = "number_not_in_source"
                 elif q and w.get("kind") != "practice" and len(added_from_question(st.get("text", ""), w["text"], q)) >= 2:
                     reason = "added_from_question"
+                elif GARBLED.search(" ".join(str(st.get(k, "")) for k in ("text", "who", "deadline"))):
+                    reason = "garbled"
+                elif w.get("kind") != "practice" and foreign_entities(st.get("text", ""), w["text"], q):
+                    reason = "entity_not_in_source"
+                if not reason and st.get("who") and w.get("kind") != "practice" and foreign_entities(st["who"], w["text"], q):
+                    st = {**st, "who": ""}        # роль только в поле «кто» и не из пункта — не показываем
         if reason:
             out["rejected"].append({**st, "reason": reason})
         else:

@@ -268,3 +268,43 @@ class UniversalTest(unittest.TestCase):
         llm = FakeLLM({"Юридический департамент": "answer"})
         t = run_turn("Юридический департамент: кто согласует договор?", reg, search_for(ws), llm, session={})
         self.assertEqual([a["label"] for a in t.answers], ["Юридический департамент"])
+
+
+class KnownConflictTest(unittest.TestCase):
+    def test_answer_on_conflicting_clause_becomes_conflict_with_letter(self):
+        from app.pipeline import load_conflicts
+        import json
+        import tempfile
+        from pathlib import Path
+        f = Path(tempfile.mkdtemp()) / "c.json"
+        f.write_text(json.dumps({"pairs": [{"department": "DBRCT", "a": "1.5", "b": "1.6", "why": "разные сроки"}]}))
+        ws = WINS + [win("dbr", "1.6", "Заявку подают за пять рабочих дней.", 0.3)]
+        conf = load_conflicts(ws, f)
+        t = run_turn("ДБРЦТ: за сколько подавать заявку?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}), session={}, conflicts=conf)
+        self.assertEqual(t.outcome, "conflict")
+        self.assertEqual(t.answers[0]["result"]["conflict_with"][0]["clause"], "1.6")
+        self.assertTrue(t.route["email"])
+
+
+class SameAcrossTest(unittest.TestCase):
+    class SameLLM(FakeLLM):
+        def __init__(self, same, *a, **kw):
+            super().__init__(*a, **kw)
+            self.same = same
+
+        def chat_json(self, system, user, schema, max_tokens=1500):
+            if "Сравни ответы" in system:
+                return {"same": self.same, "difference": "" if self.same else "разные сроки"}, {}
+            return super().chat_json(system, user, schema, max_tokens)
+
+    def test_same_answers_no_clarify(self):
+        llm = self.SameLLM(True, {"Техническая дирекция": "answer", "ДБРЦТ": "answer"})
+        t = run_turn("Кто подаёт заявку на расчёт?", REG, search_for(WINS), llm, session={})
+        self.assertNotEqual(t.outcome, "clarify")
+        self.assertEqual(len(t.answers), 2)
+        self.assertIn("одинаков", t.text)
+
+    def test_different_answers_clarify(self):
+        llm = self.SameLLM(False, {"Техническая дирекция": "answer", "ДБРЦТ": "answer"})
+        t = run_turn("За сколько подавать заявку на расчёт?", REG, search_for(WINS), llm, session={})
+        self.assertEqual(t.outcome, "clarify")

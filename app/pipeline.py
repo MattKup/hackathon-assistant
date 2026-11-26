@@ -97,6 +97,70 @@ CONFLICT = ("Пункты регламента здесь противореча
             "вы в копии. Ниже — оба пункта.")
 
 
+def load_conflicts(windows, path=None):
+    """Подтверждённые противоречия (config/conflicts_confirmed.json) с текстом пунктов из индекса: {(dep, clause): [pair…]}."""
+    import json
+    from pathlib import Path
+    path = Path(path) if path else Path(__file__).resolve().parents[1] / "config" / "conflicts_confirmed.json"
+    if not path.exists():
+        return {}
+    text = {}
+    for w in windows:
+        text.setdefault((w.get("department"), w.get("clause")), w.get("text", ""))
+    out = {}
+    for p in json.loads(path.read_text()).get("pairs", []):
+        for x, y in ((p["a"], p["b"]), (p["b"], p["a"])):
+            out.setdefault((p["department"], x), []).append(
+                {"clause": y, "why": p.get("why", ""), "text": text.get((p["department"], y), "")})
+    return out
+
+
+def apply_conflicts(results, conflicts, tr):
+    """Ответ опирается на пункт из подтверждённой пары противоречий → оба пункта, исход «противоречие» (судья v7: q117, q136, q065, q138)."""
+    if not conflicts:
+        return results
+    out = []
+    for r in results:
+        res = r["result"]
+        if res["verdict"] == "no_answer":
+            out.append(r)
+            continue
+        hits = []
+        for st in res.get("steps", []):
+            for c in conflicts.get((st.get("department"), st.get("clause")), []):
+                if c not in hits:
+                    hits.append(c)
+        if hits:
+            note = "; ".join(f"п. {c['clause']}: {c['why']}" for c in hits)
+            res = {**res, "verdict": "conflict",
+                   "caveat": ((res.get("caveat") or "") + " Противоречие в регламенте — " + note).strip(),
+                   "conflict_with": hits}
+            tr.append(f"{r['label']}: пункт ответа входит в подтверждённое противоречие — показываю оба пункта")
+        out.append({**r, "result": res})
+    return out
+
+
+SAME_SYSTEM = ("Сравни ответы разных дирекций на один вопрос сотрудника. same=true ТОЛЬКО если по сути они одинаковы: "
+               "те же сроки и числа, те же ответственные роли, те же условия и исключения (формулировки могут отличаться). "
+               "Любое различие в сроке, роли, условии или порядке действий — same=false. difference — коротко, в чём различие.")
+SAME_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["same", "difference"],
+               "properties": {"same": {"type": "boolean"}, "difference": {"type": "string", "maxLength": 200}}}
+
+
+def answers_same(llm, question, answered):
+    """Разбор v4 п. 1b, судья v7: в 10 вопросах «одинаково во всех дирекциях» ассистент зря спрашивал дирекцию."""
+    blocks = []
+    for r in answered:
+        res = r["result"]
+        steps = "; ".join(f"{st.get('text', '')} ({st.get('who', '')} {st.get('deadline', '')})".strip() for st in res.get("steps", []))
+        blocks.append(f"{r['label']}: {res.get('summary', '')} Шаги: {steps} Оговорка: {res.get('caveat', '')}")
+    try:
+        js, _ = llm.chat_json(SAME_SYSTEM, f"Вопрос: {question}\n\n" + "\n\n".join(blocks), SAME_SCHEMA, max_tokens=120)
+        return bool(js.get("same")), js.get("difference", "")
+    except Exception:
+        return False, ""
+
+
 def outcome_of(results):
     verdicts = [r["result"]["verdict"] for r in results]
     return "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
@@ -229,13 +293,15 @@ def _docs_for(depts, stage, registry):
     return out
 
 
-def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None):
+def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None, conflicts=None):
     """search_fn(query, allowed) -> hits (score реранкера).
     session (мутируется): docs, clarifications, no_clarify, complex; cache — ответы по дирекциям до выбора;
     ask — открытый уточняющий вопрос (условие или тема); ask_reply — ответ сотрудника на него."""
     session = {} if session is None else session
     c = Counted(llm)
+    session["_conflicts"] = conflicts
     t = _run_turn(question, registry, search_fn, c, session, workers, answer_cache)
+    session.pop("_conflicts", None)
     t.tokens = c.t
     return t
 
@@ -248,8 +314,9 @@ def _ask_turn(session, kind, question, text, options, tr, hits, base=None, dep=N
 def _final(results, note, tr, hits, session, question, complex_=False):
     """Ответ готов. Одна дирекция и ответ зависит от условия, не сказанного в вопросе, → уточняющий вопрос (кейс 2);
     правило есть, а случай не оговорён → ответ с оговоркой + автоматическое письмо в службу качества (кейс 1)."""
+    results = apply_conflicts(results, session.get("_conflicts"), tr)
     shown = [r for r in results if r["result"]["verdict"] != "no_answer"]
-    if len(shown) == 1 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
+    if len(shown) == 1 and not session.get("no_clarify") and not any(r["result"]["verdict"] == "conflict" for r in shown) and session.get("clarifications", 0) < 2:
         r = shown[0]
         opts = grounded_options(r["result"].get("ask_options") or [], r.get("windows") or [])
         if r["result"].get("ask", "").strip() and len(opts) >= 2:
@@ -495,6 +562,12 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     note = ("В регламентах " + (", ".join(silent[:-1]) + " и " + silent[-1] if len(silent) > 1 else silent[0])
             + " об этом не сказано.") if answered and silent else ""
     if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
+        same, diff = answers_same(llm, question, answered)
+        if same:
+            tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и по сути одинаков — уточнять не нужно")
+            return _finish(answered, ("Порядок одинаков во всех дирекциях, где он описан. " + note).strip())
+        if diff:
+            tr.append(f"Ответы дирекций различаются: {diff}")
         session["cache"] = {"q": question, "answers": {r["doc_id"]: r for r in answered}, "order": [r["doc_id"] for r in answered],
                             "hits": hits[:5]}
         tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и отличается — уточняю дирекцию")

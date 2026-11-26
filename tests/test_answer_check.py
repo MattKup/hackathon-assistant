@@ -62,3 +62,40 @@ class CheckTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EntityCheckTest(unittest.TestCase):
+    """Судья v7: додуманные роли (q012, q118) и ТКП вместо КП (q129); иероглифы в сроке (q026)."""
+
+    def setUp(self):
+        self.w = [{**W[0], "clause": "6.4", "text": "6.4. На основе итогового расчёта трудозатрат SS готовит КП и направляет его Заказчику и закрывает Заявку."}]
+
+    def step(self, text, who="", deadline=""):
+        return {"verdict": "answer", "summary": "", "caveat": "", "missing": "", "steps": [
+            {"text": text, "who": who, "deadline": deadline, "ref": "w1", "quote": "SS готовит КП и направляет его Заказчику"}]}
+
+    def test_role_not_in_source_rejected(self):
+        r = check(self.step("Менеджер по качеству готовит КП и направляет его Заказчику."), self.w, "Кто отправляет КП?")
+        self.assertEqual(r["rejected"][0]["reason"], "entity_not_in_source")
+
+    def test_abbr_not_in_source_rejected(self):
+        r = check(self.step("SS готовит ТКП и направляет его Заказчику."), self.w, "Кто отправляет предложение?")
+        self.assertEqual(r["rejected"][0]["reason"], "entity_not_in_source")
+
+    def test_expansion_counts_as_present(self):
+        w = [{**self.w[0], "text": "9.4. Основными задачами РП являются мониторинг и управление рисками."}]
+        st = {"verdict": "answer", "summary": "", "caveat": "", "missing": "", "steps": [
+            {"text": "Руководитель проекта управляет рисками.", "who": "", "deadline": "", "ref": "w1", "quote": "Основными задачами РП являются мониторинг"}]}
+        self.assertEqual(len(check(st, w, "Кто управляет рисками?")["steps"]), 1)
+
+    def test_role_from_question_allowed(self):
+        r = check(self.step("Вы как Архитектор: SS готовит КП и направляет его Заказчику."), self.w, "Я Архитектор, кто отправляет КП?")
+        self.assertEqual(len(r["steps"]), 1)
+
+    def test_who_not_in_source_blanked(self):
+        r = check(self.step("SS готовит КП и направляет его Заказчику.", who="Логист"), self.w, "Кто отправляет КП?")
+        self.assertEqual(r["steps"][0]["who"], "")
+
+    def test_garbled_rejected(self):
+        r = check(self.step("SS готовит КП и направляет его Заказчику.", deadline="не позднее手続きы"), self.w, "Когда?")
+        self.assertEqual(r["rejected"][0]["reason"], "garbled")
