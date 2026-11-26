@@ -21,6 +21,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+# абляция: --off=G1,G3 выключает гипотезы (EVALS.md); читается до импорта app — флаги задаются при загрузке модулей
+for _a in sys.argv:
+    if _a.startswith("--off="):
+        os.environ["HK_OFF"] = _a[6:]
 
 from app.answer.llm import LLM  # noqa: E402
 from app.pipeline import build_index, load_conflicts, run_turn  # noqa: E402
@@ -49,7 +53,9 @@ def both_ib_stages(t, docs):
 
 
 def main(corpus_rel, eval_rel, *rest):
+    flags = [r for r in rest if r.startswith("--")]
     no_clarify = "--no-clarify" in rest
+    oracle = "--oracle" in rest      # потолок модели ответа: эталонные пункты принудительно в выдаче (исследование 26.11, рек. 1)
     rest = [r for r in rest if not r.startswith("--")]
     limit = rest[0] if rest else None
     inbox, run_dir = Path(os.environ["INBOX_DIR"]), Path(os.environ.get("RUN_DIR", "."))
@@ -76,7 +82,28 @@ def main(corpus_rel, eval_rel, *rest):
         return tei.rerank(q, texts)
     hy = Hybrid(windows, vecs, embed_c, rerank_c)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
-    search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
+    base_search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
+    by_wid = {w["window_id"]: w for w in windows}
+    by_dc = {}
+    for w in windows:
+        by_dc.setdefault((w["department"], w["clause"]), w)
+
+    def search_for(e):
+        if not oracle:
+            return base_search
+        gold = []
+        for dep, v in (e["expected"].get("by_department") or {}).items():
+            for c in v.get("citations", []):
+                w = by_wid.get(c.get("window_id")) or by_dc.get((dep, c["clause"]))
+                if w and w not in gold:
+                    gold.append(w)
+
+        def s(q, allowed, k=16):
+            hits = base_search(q, allowed, k)
+            add = [{**w, "score": 1.0} for w in gold if allowed is None or w["doc_id"] in allowed]
+            ids = {w["window_id"] for w in add}
+            return (add + [h for h in hits if h["window_id"] not in ids])[:k]
+        return s
     # реестр противоречий: применяются только пары, подтверждённые службой качества (база CONFLICTS_DB, если задана)
     confirmed = []
     if os.environ.get("CONFLICTS_DB"):
@@ -94,6 +121,7 @@ def main(corpus_rel, eval_rel, *rest):
         """Один вопрос эталона (потокобезопасно: свои счётчики, сливаются в порядке эталона)."""
         st, bs, bc = Counter(), Counter(), Counter()
         q = e["question"]
+        search = search_for(e)
         t0 = time.time()
         try:
             sess = {"no_clarify": no_clarify}
@@ -165,7 +193,7 @@ def main(corpus_rel, eval_rel, *rest):
         print(e["id"], e["class"], row.get("turn1", {}).get("outcome"), row["outcome_ok"], row["seconds"], flush=True)
         return row, st, bs, bc
 
-    workers = int(os.environ.get("EVAL_WORKERS", "4"))   # вопросы параллельно (vLLM батчит): ≈ 2× быстрее при 4
+    workers = int(next((r[10:] for r in flags if r.startswith("--workers=")), os.environ.get("EVAL_WORKERS", "4")))   # вопросы параллельно (vLLM батчит): ≈ 2× быстрее при 4
     with open(run_dir / "answers.jsonl", "w") as fh, ThreadPoolExecutor(max_workers=workers) as ex:
         for row, st, bs, bc in ex.map(process, items):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -181,7 +209,7 @@ def main(corpus_rel, eval_rel, *rest):
     m = {"vllm_prefix_cache": ({"queries": pc1["queries"] - pc0["queries"], "hits": pc1["hits"] - pc0["hits"],
                                 "hit_rate": round((pc1["hits"] - pc0["hits"]) / max(1, pc1["queries"] - pc0["queries"]), 3)}
                                if pc0 and pc1 else None),
-         "mode": "no_clarify" if no_clarify else "clarify", "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
+         "mode": "no_clarify" if no_clarify else "clarify", "oracle": oracle, "off": os.environ.get("HK_OFF", ""), "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
          "asked": stats["asked"], "deep_passes": stats["deep"], "deep_better": stats["deep_better"], "auto_mail_not_covered": stats["auto_mail"],
          "tokens_total": {k[4:]: stats[k] for k in stats if k.startswith("tok_")},
