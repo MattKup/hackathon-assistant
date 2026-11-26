@@ -14,7 +14,8 @@ from email.message import EmailMessage
 BOT = "assistant@assistant.local"
 
 
-def case_email(case, qa_address):
+def case_email(case, qa_address, draft=None):
+    from app.escalation.draft import as_text
     deps = ", ".join(json.loads(case["departments"])) or "не определено"
     frags = json.loads(case["fragments"])
     lines = [f"Вопрос сотрудника: {case['question']}", f"Подразделение: {deps}", f"Почему бот не ответил: {case['reason']}", ""]
@@ -27,6 +28,7 @@ def case_email(case, qa_address):
         lines.append("Что бот нашёл в регламентах (близкое, но не отвечающее):")
         lines += [f"  • {f['doc']} п. {f['clause']}: {f['text'][:300]}" for f in frags[:5]]
         lines.append("")
+    lines += as_text(draft)
     lines.append("Ответьте на это письмо (сотрудник в копии) — итоговый ответ бот добавит в базу знаний как практику.")
     m = EmailMessage()
     m["Subject"] = f"Вопрос по регламентам: {case['question'][:80]}"

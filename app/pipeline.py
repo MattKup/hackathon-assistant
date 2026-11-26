@@ -55,10 +55,39 @@ class Turn:
     hits: list = field(default_factory=list)
     documents: list = field(default_factory=list)     # для «где регламент»: [{title, label, sections}]
     external_refs: list = field(default_factory=list)
+    tokens: dict = field(default_factory=dict)        # для расчёта экономики: вызовы и токены модели за ход
 
 
 COMPLEX_NOTE = ("\n\n(Это комплексный проект нескольких дирекций. Ответь для части работ, которую ведёт {dept}, по её регламенту. "
                 "То, что в регламенте нет правил о совместных проектах или о других дирекциях, — не причина для no_answer.)")
+
+
+class Counted:
+    """Считает вызовы и токены модели за ход (расчёт экономики — по ценам провайдера, решение организаторов 26.11)."""
+
+    def __init__(self, llm):
+        self.llm, self.t = llm, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+
+    def chat_json(self, *a, **kw):
+        res, meta = self.llm.chat_json(*a, **kw)
+        self.t["calls"] += 1
+        self.t["prompt_tokens"] += (meta or {}).get("prompt_tokens") or 0
+        self.t["completion_tokens"] += (meta or {}).get("completion_tokens") or 0
+        return res, meta
+
+
+ASK_DONT_KNOW = "Не знаю"
+ASK_SEND = "Отправить вопрос в службу качества"
+NOT_COVERED = "Ваш случай в регламенте прямо не оговорён — я отправил вопрос в службу качества, вы в копии. Ниже — правило, которое есть."
+
+
+def outcome_of(results):
+    verdicts = [r["result"]["verdict"] for r in results]
+    return "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
+
+
+def not_covered(results):
+    return any(r["result"]["verdict"] != "no_answer" and r["result"].get("case_covered") is False for r in results)
 
 
 def in_scope_llm(llm, question):
@@ -110,8 +139,44 @@ def _docs_for(depts, stage, registry):
 
 
 def run_turn(question, registry, search_fn, llm, session=None, workers=4):
-    """search_fn(query, allowed) -> hits (score реранкера). session: {'docs': [...], 'clarifications': n}."""
-    session = {} if session is None else session      # мутируется: кэш ответов для второго хода
+    """search_fn(query, allowed) -> hits (score реранкера).
+    session (мутируется): docs, clarifications, no_clarify, complex; cache — ответы по дирекциям до выбора;
+    ask — открытый уточняющий вопрос (условие или тема); ask_reply — ответ сотрудника на него."""
+    session = {} if session is None else session
+    c = Counted(llm)
+    t = _run_turn(question, registry, search_fn, c, session, workers)
+    t.tokens = c.t
+    return t
+
+
+def _ask_turn(session, kind, question, text, options, tr, hits, base=None, dep=None, ws=None):
+    session["ask"] = {"kind": kind, "q": question, "text": text, "options": options, "base": base, "dep": dep, "ws": ws}
+    return Turn("ask", text, options=[{"doc_id": f"a{i}", "label": o} for i, o in enumerate(options)], trace=tr, hits=hits)
+
+
+def _final(results, note, tr, hits, session, question):
+    """Ответ готов. Одна дирекция и ответ зависит от условия, не сказанного в вопросе, → уточняющий вопрос (кейс 2);
+    правило есть, а случай не оговорён → ответ с оговоркой + автоматическое письмо в службу качества (кейс 1)."""
+    shown = [r for r in results if r["result"]["verdict"] != "no_answer"]
+    if len(shown) == 1 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
+        r = shown[0]
+        opts = [o for o in r["result"].get("ask_options") or [] if o.strip()]
+        if r["result"].get("ask", "").strip() and len(opts) >= 2:
+            session["clarifications"] = session.get("clarifications", 0) + 1
+            tr.append(f"{r['label']}: ответ зависит от условия, которого нет в вопросе, — уточняю")
+            t = _ask_turn(session, "condition", question, r["result"]["ask"].strip(), opts[:4] + [ASK_DONT_KNOW], tr, hits,
+                          base=r, dep=r["doc_id"], ws=r.get("windows"))
+            session["ask"]["hits"] = hits[:5]
+            return t
+    t = Turn(outcome_of(results), note, answers=results, trace=tr, hits=hits, external_refs=cited_refs(results))
+    if not_covered(results):
+        tr.append("Правило есть, но случай сотрудника в нём не оговорён — отправляю вопрос в службу качества")
+        t.text = (NOT_COVERED + (" " + note if note else ""))
+        t.route = {"to": "служба качества", "email": True, "why": "случай не оговорён"}
+    return t
+
+
+def _run_turn(question, registry, search_fn, llm, session, workers):
     tr = []
     if TASK_VERBS.search(question):
         tr.append("Это просьба выполнить работу, а не вопрос по регламентам — отказ")
@@ -123,6 +188,33 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr)
 
     by_id = {x["doc_id"]: x for x in registry}
+    ask, reply = session.get("ask"), session.pop("ask_reply", None)
+    if ask and reply is not None and ask["q"] == question:
+        session.pop("ask", None)
+        if ask["kind"] == "topic":
+            if reply == ASK_SEND:
+                tr.append("Сотрудник попросил отправить вопрос в службу качества")
+                return Turn("escalate", "Я отправил вопрос в службу качества, вы в копии — ответ придёт на почту.",
+                            route={"to": "служба качества", "email": True}, trace=tr)
+            tr.append(f"Сотрудник уточнил тему: {reply}")
+            return _run_turn(f"{question} ({reply})", registry, search_fn, llm, session, workers)
+        base = ask["base"]
+        if reply == ASK_DONT_KNOW:
+            tr.append("Условие неизвестно — показываю правило со всеми условиями; однозначный ответ дать нельзя")
+            return Turn("answer_with_caveat", "Без этого условия однозначно ответить нельзя. Ниже — правило и от чего оно зависит; "
+                        "если условие неясно, задайте вопрос службе качества.", answers=[base], trace=tr,
+                        hits=ask.get("hits") or [], external_refs=cited_refs([base]))
+        tr.append(f"Сотрудник уточнил условие: {reply}")
+        q2 = f"{question}\n\nУточнение сотрудника: {ask['text']} — {reply}"
+        res, meta = llm_answer(llm, q2, ask["ws"], base["label"])
+        r = {**base, "result": res, "meta": meta}
+        if res["verdict"] == "no_answer":
+            r = base
+        tr.append(f"{r['label']}: ответ для варианта «{reply}»")
+        out = Turn(outcome_of([r]), answers=[r], trace=tr, external_refs=cited_refs([r]))
+        if not_covered([r]):
+            out.text, out.route = NOT_COVERED, {"to": "служба качества", "email": True, "why": "случай не оговорён"}
+        return out
     cache = session.get("cache")
     if cache and cache["q"] == question and session.get("docs"):
         chosen = {by_id[d]["department"] for d in session["docs"] if d in by_id}
@@ -130,9 +222,7 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         if cached and chosen <= set(cache["answers"]):
             tr.append("Ответы по дирекциям уже готовы — показываю " + ("выбранную" if len(cached) == 1 else "выбранные"))
             hits = cache["hits"]
-            verdicts = [r["result"]["verdict"] for r in cached]
-            outcome = "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
-            return Turn(outcome, answers=cached, trace=tr, hits=hits, external_refs=cited_refs(cached))
+            return _final(cached, "", tr, hits, session, question)
 
     # 1. понять вопрос (агентный шаг)
     u, _ = understand(llm, question)
@@ -179,11 +269,9 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
                     route={"to": "служба качества", "email": True}, answers=results, trace=tr, hits=hits)
 
     def _finish(results, note=""):
-        verdicts = [r["result"]["verdict"] for r in results]
-        if all(v == "no_answer" for v in verdicts):
+        if all(r["result"]["verdict"] == "no_answer" for r in results):
             return escalate_or_scope(results)
-        outcome = "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
-        return Turn(outcome, note, answers=results, trace=tr, hits=hits, external_refs=cited_refs(results))
+        return _final(results, note, tr, hits, session, question)
 
     if best < NO_SUPPORT:
         if not in_scope_llm(llm, question):
@@ -193,6 +281,13 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         tr.append("Подходящих пунктов в регламентах нет — отправляю вопрос в службу качества")
         return Turn("escalate", "В регламентах нет ответа на этот вопрос. Я отправил вопрос в службу качества, вы в копии — ответ придёт на почту.",
                     route={"to": "служба качества", "email": True}, trace=tr, hits=hits)
+
+    # вопрос не сопоставляется с регламентом (размытый) → сначала уточнить тему, а не отвечать наугад
+    topics = list(dict.fromkeys(h["section_title"] for h in hits[:8] if h.get("section_title")))[:3]
+    if u.get("vague") and len(topics) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
+        session["clarifications"] = session.get("clarifications", 0) + 1
+        tr.append("Вопрос размытый — предлагаю близкие темы из регламентов")
+        return _ask_turn(session, "topic", question, "Уточните, о чём вопрос:", topics + [ASK_SEND], tr, hits)
 
     if FIND_DOC.search(question):
         if hits[0].get("external_refs"):
@@ -240,7 +335,7 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         q = question + (COMPLEX_NOTE.format(dept=DEPT_NAMES.get(dep, dep)) if complex_ else "")
         res, meta = llm_answer(llm, q, ws, DEPT_NAMES.get(dep, dep))
         meta["clauses_seen"] = [w["clause"] for w in ws]
-        return {"doc_id": dep, "label": DEPT_NAMES.get(dep, dep), "result": res, "meta": meta}
+        return {"doc_id": dep, "label": DEPT_NAMES.get(dep, dep), "result": res, "meta": meta, "windows": ws}
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
     for r in results:

@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from app.dialog.clarify import label
+from app.escalation import draft as qa_draft
 from app.escalation import mail
 from app.escalation.process import practice_windows, process_replies
 from app.escalation.store import Store
@@ -35,6 +36,9 @@ class MockLLM:
             return {"in_scope": True}, {}
         if "queries" in props:
             return {"queries": [user.rsplit("Вопрос сотрудника:", 1)[-1].strip()], "departments": [], "stage": ""}, {}
+        if "proposal" in props:
+            return {"found": "(демо-режим) найденные пункты", "gap": "случай не оговорён", "proposal": "требует решения эксперта",
+                    "clauses": []}, {}
         if "is_final" in props:
             mail_part = user.lower().split("письмо эксперта")[-1]
             final = "уточн" not in mail_part
@@ -48,8 +52,10 @@ class MockLLM:
         txt = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", txt)
         first = txt[:220].rsplit(" ", 1)[0] if len(txt) > 220 else txt
         if not first:
-            return {"verdict": "no_answer", "summary": "", "steps": [], "caveat": "", "missing": "нет фрагментов"}, {}
+            return {"verdict": "no_answer", "summary": "", "steps": [], "caveat": "", "missing": "нет фрагментов",
+                    "case_covered": True, "ask": "", "ask_options": []}, {}
         return {"verdict": "answer", "summary": "(демо-режим без модели) " + first[:200], "caveat": "", "missing": "",
+                "case_covered": True, "ask": "", "ask_options": [],
                 "steps": [{"text": first, "who": "", "deadline": "", "ref": "w1", "quote": first}]}, {"seconds": 0}
 
 
@@ -72,7 +78,8 @@ class App:
         self.mailpit = mail.Mailpit(os.environ.get("MAILPIT_API", "http://127.0.0.1:8025"))
         self.log = data / "journal.jsonl"
         if mock:
-            self.llm = MockLLM()
+            self.llm = self.review_llm = MockLLM()
+            self.review_model = "mock"
             self._rebuild_mock()
         else:
             from app.answer.llm import LLM
@@ -80,6 +87,9 @@ class App:
             from app.search.tei import TEI
             self.tei = TEI(os.environ["TEI_EMBED_URL"], os.environ["TEI_RERANK_URL"])
             self.llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
+            # второй проход по обращениям (черновик для СК): можно направить на более крупную open-weights модель
+            self.review_model = os.environ.get("LLM_REVIEW_MODEL") or os.environ.get("LLM_MODEL", "qwen38")
+            self.review_llm = LLM(os.environ.get("LLM_REVIEW_URL") or os.environ["LLM_BASE_URL"], self.review_model)
             self.vec = dict(zip([w["window_id"] for w in self.windows],
                                 self.tei.embed([w["path"] + "\n" + w["text"] for w in self.windows])))
             self.Hybrid = Hybrid
@@ -158,7 +168,10 @@ class App:
         if no_clarify is not None:
             s["no_clarify"] = bool(no_clarify)      # режим «без уточнения дирекции»: сразу ответы по всем дирекциям
         q = question
-        if choice is not None and s["pending"]:
+        if choice is not None and s["pending"] and s.get("pending_kind") == "ask":
+            q = s["pending"]                         # ответ на уточняющий вопрос (условие или тема)
+            s["ask_reply"] = next((o["label"] for o in s["pending_options"] if o["doc_id"] == choice), choice)
+        elif choice is not None and s["pending"]:
             q = s["pending"]
             opts = s["pending_options"]
             depts = [o["doc_id"] for o in opts if o["doc_id"] not in ("*", "?")]
@@ -169,9 +182,10 @@ class App:
         elif q:
             s["complex"] = False
             s.pop("cache", None)
+            s.pop("ask", None)
         t0 = time.time()
         turn = run_turn(q, self.registry, self.search, self.llm, session=s)   # s хранит кэш ответов по дирекциям для второго хода
-        out = {"outcome": turn.outcome, "text": turn.text, "trace": turn.trace, "route": turn.route,
+        out = {"outcome": turn.outcome, "text": turn.text, "tokens": turn.tokens, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
                "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": []}
         for a in turn.answers:
@@ -180,13 +194,15 @@ class App:
                                    "missing": r.get("missing", ""), "steps": [
                                        {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section")}
                                        | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]]})
-        if turn.outcome == "clarify":
-            s["pending"], s["pending_options"] = q, turn.options
+        if turn.outcome in ("clarify", "ask"):
+            s["pending"], s["pending_options"], s["pending_kind"] = q, turn.options, turn.outcome
         else:
             s["pending"] = None
-        s["last"] = {"q": q, "hits": turn.hits[:5], "employee": employee}
-        if turn.outcome == "escalate":
-            out["case"] = self.escalate(sid, "в регламентах нет опоры для ответа")
+        s["last"] = {"q": q, "hits": turn.hits[:5], "employee": employee,
+                     "depts": [a["label"] for a in turn.answers if a["result"]["verdict"] != "no_answer"]}
+        if turn.outcome == "escalate" or (turn.route or {}).get("email"):
+            why = (turn.route or {}).get("why") or "в регламентах нет опоры для ответа"
+            out["case"] = self.escalate(sid, why)
         out["seconds"] = round(time.time() - t0, 2)
         s["history"].append({"role": "user", "text": q})
         s["history"].append({"role": "assistant", "text": turn.outcome})
@@ -199,13 +215,23 @@ class App:
         s = self.sessions.get(sid) or {}
         last = s.get("last") or {}
         frags = [{"doc": h.get("path", "").split(" › ")[0], "clause": h["clause"], "text": h["text"]} for h in last.get("hits", [])]
-        deps = sorted({label(d, self.registry) for d in self.registry if d["doc_id"] in (s.get("docs") or [])})
+        deps = last.get("depts") or sorted({label(d, self.registry) for d in self.registry if d["doc_id"] in (s.get("docs") or [])})
         case = self.store.new_case(last.get("employee", ""), last.get("q", ""), deps, s.get("history", [])[-6:], frags, reason)
-        try:
-            mail.send(mail.case_email(case, self.qa_address), *self.smtp)
-            return {"id": case["case_id"], "to": self.qa_address, "cc": last.get("employee", ""), "sent": True}
-        except OSError as e:
-            return {"id": case["case_id"], "sent": False, "error": str(e)[:120]}
+
+        def work():
+            """Черновик для эксперта (второй проход LLM) → письмо в СК. В фоне: сотрудник не ждёт."""
+            d = None
+            try:
+                d = qa_draft.prepare(self.review_llm, case, self.review_model)
+            except Exception as e:  # без черновика письмо всё равно уходит
+                d = {"error": str(e)[:120]}
+            try:
+                mail.send(mail.case_email(case, self.qa_address, d if d and "error" not in d else None), *self.smtp)
+                self.store.save_draft(case["case_id"], d, True)
+            except OSError:
+                self.store.save_draft(case["case_id"], d, False)
+        threading.Thread(target=work, daemon=True).start()
+        return {"id": case["case_id"], "to": self.qa_address, "cc": last.get("employee", ""), "sent": "queued"}
 
     def poll_mail(self):
         ev = process_replies(self.store, self.mailpit, self.llm)

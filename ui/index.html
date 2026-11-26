@@ -329,7 +329,10 @@ function render(r){
     if (used.length) h += `<div class="lbl">Подтверждено источниками</div><div class="srcs">` + Object.values(uniq).map(({s, ns}) =>
       `<div class="src" data-n="${ns[0]}"><span>📄</span><div><div class="t">${s.practice ? "Практика службы качества" : esc(s.doc_title)}</div><div class="s">${s.practice ? "подтверждена экспертом" : `п. ${esc(s.clause)}${s.section ? " · " + esc(s.section) : ""}`} · сноски ${ns.join(", ")}</div></div>
        <span class="badge ${s.practice ? "a" : "g"} ml">${s.practice ? "практика" : "действует"}</span></div>`).join("") + `</div>`;
-    if (["answer_with_caveat","conflict"].includes(r.outcome)) h += `<div class="chips"><button class="chip" data-escalate="1">Уточнить у службы качества</button></div>`;
+    if (r.case) h += `<div class="note">✉️ ${r.case.sent ? "Вопрос отправлен в службу качества · копия — вам" : "Письмо не отправлено: " + esc(r.case.error || "")}</div>`;
+    else if (["answer_with_caveat","conflict"].includes(r.outcome)) h += `<div class="chips"><button class="chip" data-escalate="1">Уточнить у службы качества</button></div>`;
+  } else if (r.outcome === "ask") {
+    h += `<p class="lead">${esc(r.text)}</p><div class="chips">` + r.options.map(o => `<button class="chip${/Не знаю|службу качества/.test(o.label) ? " ghost" : ""}" data-choice="${o.id}" data-ask="1">${esc(o.label)}</button>`).join("") + `</div>`;
   } else if (r.outcome === "document") {
     h += `<p class="lead">${esc(r.text)}</p><div class="srcs">` + r.documents.map(d => `<div class="src"><span>📄</span><div><div class="t">${esc(d.title)}</div><div class="s">${esc(d.label)} · ${d.sections.slice(0,3).map(esc).join("; ")}</div></div></div>`).join("") + `</div>`;
   } else if (r.outcome === "escalate") {
@@ -340,7 +343,7 @@ function render(r){
   const nt = r.trace?.length || 0;
   h += `<details class="how"><summary>Как найден ответ · ${nt} ${plural(nt, "шаг", "шага", "шагов")}</summary><ol>${(r.trace||[]).map(t => `<li>${esc(cap(t))}</li>`).join("")}</ol></details>
     <div class="foot meta">${String(r.seconds).replace(".", ",")} с · локальная модель · внешних запросов 0<span class="ml"></span>
-      ${r.outcome !== "clarify" ? `<button class="iconbtn" data-fb="up">👍</button><button class="iconbtn" data-fb="down">👎</button>` : ""}</div>`;
+      ${!["clarify","ask"].includes(r.outcome) ? `<button class="iconbtn" data-fb="up">👍</button><button class="iconbtn" data-fb="down">👎</button>` : ""}</div>`;
   return h;
 }
 
@@ -358,7 +361,7 @@ function showSource(n){
 function bind(){
   $$("sup.fn[data-n],.src[data-n]").forEach(x => x.onclick = () => showSource(+x.dataset.n));
   $$("[data-choice]").forEach(b => b.onclick = () => { $$("[data-choice],[data-multi]").forEach(x => x.disabled = true);
-    ask("", b.dataset.choice, b.dataset.label || b.textContent); $("#ctx").textContent = b.dataset.choice === "?" ? "" : "· " + b.textContent; });
+    ask("", b.dataset.choice, b.dataset.label || b.textContent); if (!b.dataset.ask) $("#ctx").textContent = b.dataset.choice === "?" ? "" : "· " + b.textContent; });
   $$("[data-multi]").forEach(b => b.onclick = () => b.closest(".body").querySelector(".multi").classList.remove("hide"));
   $$("[data-multigo]").forEach(b => b.onclick = () => { const ids = [...b.closest(".multi").querySelectorAll("input:checked")].map(i => i.value);
     if (ids.length) { ask("", ids.join(","), "Проект нескольких дирекций: " + ids.map(i => DEP[i]).join(" + ")); $("#ctx").textContent = "· " + ids.map(i => DEP[i]).join(" + "); } });

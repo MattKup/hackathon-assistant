@@ -13,11 +13,13 @@ SYSTEM = ("Ты готовишь поиск по регламентам прое
           "терминами из словаря (если есть), раскрой подразумеваемое («офер» → ТКП/КП, «проджект»/PM → руководитель проекта (РП)). "
           "queries — 1–3 коротких поисковых запроса на русском языке регламента, разные по смыслу, если вопрос составной. "
           "departments — только явно названные в вопросе: TECH (Техническая дирекция, техдирекция), IB (ИБ, информационная "
-          "безопасность), DBRCT (ДБРЦТ, ДБР, бизнес-решения); иначе пусто. stage — presale, project или пусто.")
-SCHEMA = {"type": "object", "additionalProperties": False, "required": ["queries", "departments", "stage"],
+          "безопасность), DBRCT (ДБРЦТ, ДБР, бизнес-решения); иначе пусто. stage — presale, project или пусто. "
+          "vague=true — только если по вопросу нельзя понять, о каком процессе, документе или действии речь "
+          "(«а что с договором?», «как быть со сроками?», «а если не успеваем?»); конкретный вопрос — false, даже если ответа может не быть.")
+SCHEMA = {"type": "object", "additionalProperties": False, "required": ["queries", "departments", "stage", "vague"],
           "properties": {"queries": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "maxLength": 160}},
                          "departments": {"type": "array", "maxItems": 3, "items": {"enum": ["TECH", "IB", "DBRCT"]}},
-                         "stage": {"enum": ["presale", "project", ""]}}}
+                         "stage": {"enum": ["presale", "project", ""]}, "vague": {"type": "boolean"}}}
 
 
 def glossary():

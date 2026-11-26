@@ -18,6 +18,8 @@ create table if not exists mails(
 create table if not exists practices(
   practice_id text primary key, case_id text, created real, expert text, question text, answer text,
   applies_to text, clauses text, outcome text, status text, revoked_by text, revoked_at real);
+create table if not exists drafts(
+  case_id text primary key, created real, draft text, mail_sent integer default 0);
 """
 
 
@@ -42,7 +44,14 @@ class Store:
         return dict(r) if r else None
 
     def cases(self):
-        return [dict(r) for r in self.db.execute("select * from cases order by created desc")]
+        rows = self.db.execute("select c.*, d.draft as draft, d.mail_sent as mail_sent from cases c "
+                               "left join drafts d on d.case_id = c.case_id order by c.created desc")
+        return [{**dict(r), "draft": json.loads(r["draft"]) if r["draft"] else None} for r in rows]
+
+    def save_draft(self, cid, draft, mail_sent):
+        self.db.execute("insert or replace into drafts values(?,?,?,?)",
+                        (cid, time.time(), json.dumps(draft, ensure_ascii=False) if draft else None, int(mail_sent)))
+        self.db.commit()
 
     def set_status(self, cid, status):
         self.db.execute("update cases set status=?, updated=? where case_id=?", (status, time.time(), cid))

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "pistonvlm"]
@@ -23,7 +24,9 @@ def step(name, resp):
     LOG.write(json.dumps({"step": name, "resp": resp}, ensure_ascii=False) + "\n")
     print("==", name)
     if isinstance(resp, dict):
-        print("  ", {k: resp.get(k) for k in ("outcome", "text", "case", "seconds", "events", "error") if k in resp})
+        print("  ", {k: resp.get(k) for k in ("outcome", "text", "case", "seconds", "events", "error", "tokens") if k in resp})
+        if resp.get("options"):
+            print("     варианты:", [o["label"] for o in resp["options"]])
         for a in resp.get("answers", []):
             print("    ", a["label"], a["verdict"], "|", a["summary"][:220])
             for s in a["steps"]:
@@ -36,9 +39,15 @@ def step(name, resp):
 step("0. сброс демо-данных", call("/api/admin/reset-demo", {}))
 Q1 = "Техническая дирекция: можно ли начать работы по гарантийному письму заказчика до подписания договора?"
 r = step("1. кейс 1: вопрос без прямого ответа в регламенте", call("/api/ask", {"session": "s1", "question": Q1, "employee": "ivanov@example.test"}))
-if r.get("outcome") != "escalate":
+if not r.get("case"):
     step("1a. сотрудник: «Уточнить у службы качества»", call("/api/escalate", {"session": "s1"}))
-cases = call("/api/cases")
+for _ in range(30):                     # черновик для эксперта готовится в фоне, затем уходит письмо
+    cases = call("/api/cases")
+    if cases and cases[0].get("mail_sent") is not None:
+        break
+    time.sleep(3)
+if cases:
+    print("   письмо ушло:", bool(cases[0].get("mail_sent")), "· черновик для эксперта:", json.dumps(cases[0].get("draft"), ensure_ascii=False)[:700])
 cid = cases[0]["case_id"] if cases else None
 print("   обращение:", cid, cases[0]["status"] if cases else "")
 if cid:
@@ -57,6 +66,10 @@ if opt:
     step("9. сотрудник выбирает ДБРЦТ", call("/api/ask", {"session": "s3", "question": "", "choice": opt}))
 r10 = step("10. кейс 2: вопрос без подразделения", call("/api/ask", {"session": "s4", "question": "Можно ли начать работы без подписанного договора?"}))
 step("11. сотрудник: не знаю", call("/api/ask", {"session": "s4", "question": "", "choice": "?"}))
+r13 = step("13. кейс 2: ответ зависит от условия", call("/api/ask", {"session": "s6", "question": "ДБРЦТ: можно ли начать работы до подписания договора?"}))
+if r13.get("outcome") == "ask" and r13.get("options"):
+    step("14. сотрудник выбирает первый вариант", call("/api/ask", {"session": "s6", "question": "", "choice": r13["options"][0]["id"]}))
+step("15. размытый вопрос", call("/api/ask", {"session": "s7", "question": "А что со сроками?"}))
 step("12. вне регламентов", call("/api/ask", {"session": "s5", "question": "Какую маржу поставить по моей сделке?"}))
 out = subprocess.run(SSH + ["curl -sS http://127.0.0.1:19652/api/v1/messages?limit=10"], capture_output=True, timeout=60)
 mails = json.loads(out.stdout or b"{}").get("messages", [])

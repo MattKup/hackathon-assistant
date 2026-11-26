@@ -17,18 +17,18 @@ DEPT = {"ib_pre": "IB", "ib_prj": "IB", "dbr": "DBRCT", "tech": "TECH"}
 
 def win(doc, clause, text, score, ext=()):
     return {"window_id": f"{doc}-{clause}", "doc_id": doc, "department": DEPT[doc], "clause": clause, "section": "1",
-            "section_title": "Раздел", "text": text, "score": score, "external_refs": list(ext), "path": doc}
+            "section_title": f"Раздел {doc} {clause}", "text": text, "score": score, "external_refs": list(ext), "path": doc}
 
 
 class FakeLLM:
     """answers: {«Техническая дирекция»: verdict}; scope: in_scope для классификатора темы."""
 
-    def __init__(self, answers, scope=True):
-        self.answers, self.scope, self.calls = answers, scope, []
+    def __init__(self, answers, scope=True, vague=False, extra=None):
+        self.answers, self.scope, self.calls, self.vague, self.extra = answers, scope, [], vague, extra or {}
 
     def chat_json(self, system, user, schema, max_tokens=1500):
         if "готовишь поиск" in system:
-            return {"queries": ["запрос"], "departments": [], "stage": ""}, {}
+            return {"queries": ["запрос"], "departments": [], "stage": "", "vague": self.vague}, {"prompt_tokens": 100, "completion_tokens": 10}
         if "классифицируешь" in system:
             return {"in_scope": self.scope}, {}
         dept = re.search(r"Подразделение: (.+)", user).group(1).strip()
@@ -37,8 +37,9 @@ class FakeLLM:
         if v == "no_answer":
             return {"verdict": "no_answer", "summary": "", "steps": [], "caveat": "", "missing": "нет"}, {}
         text = re.search(r"\[w1\][^\n]*\n(.+)", user).group(1)
-        return {"verdict": v, "summary": "ответ", "caveat": "", "missing": "",
-                "steps": [{"text": "шаг", "who": "", "deadline": "", "ref": "w1", "quote": text[:40]}]}, {}
+        extra = {} if "Уточнение сотрудника" in user else self.extra.get(dept, {})
+        return {"verdict": v, "summary": "ответ", "caveat": "", "missing": "", "case_covered": True, "ask": "", "ask_options": [],
+                "steps": [{"text": "шаг", "who": "", "deadline": "", "ref": "w1", "quote": text[:40]}], **extra}, {}
 
 
 def search_for(windows):
@@ -107,6 +108,61 @@ class VerdictFlowTest(unittest.TestCase):
     def test_out_of_scope_margin_choice(self):
         self.assertTrue(OUT_OF_SCOPE.search("Мне для этой сделки лучше поставить маржу 18% или 25%?"))
         self.assertFalse(OUT_OF_SCOPE.search("Пресейл ИБ: проверяем порог 30% для услуг без хардоффера"))
+
+
+class DialogTest(unittest.TestCase):
+    """Режим диалога (кейс 2): уточнение условия; кейс 1: случай не оговорён → письмо автоматически."""
+    ASK = {"ДБРЦТ": {"ask": "Есть подписанное гарантийное письмо?", "ask_options": ["Есть", "Нет"]}}
+
+    def test_condition_ask_then_answer(self):
+        llm = FakeLLM({"ДБРЦТ": "answer"}, extra=self.ASK)
+        sess = {}
+        q = "ДБРЦТ: можно стартовать до договора?"
+        t1 = run_turn(q, REG, search_for(WINS), llm, session=sess)
+        self.assertEqual(t1.outcome, "ask")
+        self.assertEqual([o["label"] for o in t1.options], ["Есть", "Нет", "Не знаю"])
+        sess["ask_reply"] = "Есть"
+        t2 = run_turn(q, REG, search_for(WINS), llm, session=sess)
+        self.assertEqual(t2.outcome, "answer")
+        self.assertIn("Уточнение сотрудника: Есть подписанное гарантийное письмо? — Есть", llm.calls[-1][1])
+        self.assertNotIn("ask", sess)
+
+    def test_condition_dont_know(self):
+        llm = FakeLLM({"ДБРЦТ": "answer"}, extra=self.ASK)
+        sess = {}
+        q = "ДБРЦТ: можно стартовать до договора?"
+        run_turn(q, REG, search_for(WINS), llm, session=sess)
+        n = len(llm.calls)
+        sess["ask_reply"] = "Не знаю"
+        t = run_turn(q, REG, search_for(WINS), llm, session=sess)
+        self.assertEqual(t.outcome, "answer_with_caveat")
+        self.assertIn("однозначно ответить нельзя", t.text)
+        self.assertEqual(len(llm.calls), n)
+
+    def test_no_clarify_never_asks(self):
+        llm = FakeLLM({"ДБРЦТ": "answer"}, extra=self.ASK)
+        t = run_turn("ДБРЦТ: можно стартовать до договора?", REG, search_for(WINS), llm, session={"no_clarify": True})
+        self.assertEqual(t.outcome, "answer")
+
+    def test_case_not_covered_sends_letter(self):
+        llm = FakeLLM({"Техническая дирекция": "answer_with_caveat"}, extra={"Техническая дирекция": {"case_covered": False}})
+        t = run_turn("Техдирекция: скрин обещания оплатить — гарантия для старта?", REG, search_for(WINS), llm, session={})
+        self.assertEqual(t.outcome, "answer_with_caveat")
+        self.assertTrue(t.route and t.route.get("email"))
+        self.assertTrue(t.answers)                                  # правило показываем
+
+    def test_vague_offers_topics(self):
+        sess = {}
+        t = run_turn("а что со сроками?", REG, search_for(WINS), FakeLLM({}, vague=True), session=sess)
+        self.assertEqual(t.outcome, "ask")
+        self.assertEqual(t.options[-1]["label"], "Отправить вопрос в службу качества")
+        sess["ask_reply"] = "Отправить вопрос в службу качества"
+        self.assertEqual(run_turn("а что со сроками?", REG, search_for(WINS), FakeLLM({}), session=sess).outcome, "escalate")
+
+    def test_tokens_counted(self):
+        t = run_turn("ДБРЦТ: можно стартовать до договора?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}), session={})
+        self.assertEqual(t.tokens["prompt_tokens"], 100)
+        self.assertGreaterEqual(t.tokens["calls"], 2)
 
 
 if __name__ == "__main__":

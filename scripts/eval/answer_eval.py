@@ -85,11 +85,22 @@ def main(corpus_rel, eval_rel, *rest):
                 if no_clarify and exp in ("clarify", "compare_all") and not stage_q:
                     ok = t1.outcome in ANSWERED and len(answered_depts(t1)) >= 2
                 row["answered_depts"] = answered_depts(t1)
+                if t1.outcome == "ask":
+                    # режим диалога: уточнение условия/темы. Для классов, где эталон ждёт уточнения, — это уточнение;
+                    # для остальных — второй ход с первым вариантом, засчитывается по его исходу (отдельно считаем asked)
+                    row["asked"] = [o["label"] for o in t1.options]
+                    sess["ask_reply"] = t1.options[0]["label"]
+                    t2 = run_turn(q, docs, search, llm, session=sess)
+                    row["turn2_choice"], row["turn2"] = t1.options[0]["label"], turn_dict(t2)
+                    ok = exp in ("clarify", "compare_all") or t2.outcome in EXPECT.get(exp, {exp})
+                    tok2 = t2.tokens
+                    t1.tokens = {k: t1.tokens.get(k, 0) + tok2.get(k, 0) for k in t1.tokens}
                 row["outcome_ok"] = ok
                 if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
                     alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
                     sess.update(docs=alld, clarifications=1)
                     t2 = run_turn(q, docs, search, llm, session=sess)
+                    t1.tokens = {k: t1.tokens.get(k, 0) + t2.tokens.get(k, 0) for k in t1.tokens}
                     row["turn2_choice"] = "не знаю → все варианты"
                     row["turn2"] = turn_dict(t2)
                     row["outcome_ok"] = ok = ok and len(t2.answers) >= 2
@@ -97,11 +108,17 @@ def main(corpus_rel, eval_rel, *rest):
                     dep = e["expected"]["clarify_options"][0]
                     sess.update(docs=dept_doc.get(dep, []), clarifications=1)
                     t2 = run_turn(q, docs, search, llm, session=sess)
+                    t1.tokens = {k: t1.tokens.get(k, 0) + t2.tokens.get(k, 0) for k in t1.tokens}
                     row["turn2_choice"] = dep
                     row["turn2"] = turn_dict(t2)
                 exp_clauses = {c["clause"] for v in (e["expected"].get("by_department") or {}).values() for c in v["citations"]}
                 got = {s["clause"] for a in (row.get("turn2") or row["turn1"])["answers"] for s in a["result"]["steps"]}
                 row["cite_hit"] = bool(exp_clauses & got) if exp_clauses else None
+                row["tokens"] = t1.tokens
+                for k, v in t1.tokens.items():
+                    stats["tok_" + k] += v
+                stats["asked"] += 1 if row.get("asked") else 0
+                stats["auto_mail"] += 1 if (t1.route or {}).get("email") and t1.outcome != "escalate" else 0
             except Exception as ex:  # сбой одного вопроса не останавливает прогон
                 row = {"id": e["id"], "class": e["class"], "question": q, "error": str(ex)[:300], "outcome_ok": False}
                 stats["errors"] += 1
@@ -118,6 +135,9 @@ def main(corpus_rel, eval_rel, *rest):
     classes = sorted({c for c, _ in by_class})
     m = {"mode": "no_clarify" if no_clarify else "clarify", "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
+         "asked": stats["asked"], "auto_mail_not_covered": stats["auto_mail"],
+         "tokens_total": {k[4:]: stats[k] for k in stats if k.startswith("tok_")},
+         "tokens_per_question": {k[4:]: round(stats[k] / max(1, len(items))) for k in stats if k.startswith("tok_")},
          "by_class": {c: f"{by_class[(c, True)]}/{by_class[(c, True)] + by_class[(c, False)]}" for c in classes},
          "p50_s": times[len(times) // 2] if times else None, "p95_s": times[max(0, int(len(times) * .95) - 1)] if times else None}
     (run_dir / "metrics.json").write_text(json.dumps(m, ensure_ascii=False, indent=2))
@@ -125,10 +145,10 @@ def main(corpus_rel, eval_rel, *rest):
 
 
 def turn_dict(t):
-    return {"outcome": t.outcome, "text": t.text, "options": [o["label"] for o in t.options], "route": t.route,
+    return {"outcome": t.outcome, "text": t.text, "tokens": t.tokens, "options": [o["label"] for o in t.options], "route": t.route,
             "documents": t.documents, "external_refs": t.external_refs,
             "trace": t.trace, "top": [[h["department"], h["clause"], h["score"]] for h in t.hits[:5]],
-            "answers": [{"label": a["label"], "result": a["result"], "meta": a["meta"]} for a in t.answers]}
+            "answers": [{"label": a["label"], "result": a["result"], "meta": a["meta"]} for a in t.answers]}  # windows не пишем
 
 
 if __name__ == "__main__":
