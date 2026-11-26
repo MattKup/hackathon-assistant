@@ -292,6 +292,13 @@ def make_handler(app):
                     out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""))
                     out["session"] = sid
                     return self._json(200, out)
+                if self.path == "/api/admin/reset-demo":   # очистить обращения, карточки, журнал (демо)
+                    app.store.db.executescript("delete from cases; delete from mails; delete from practices;")
+                    app.store.db.commit()
+                    app.log.write_text("")
+                    app.sessions.clear()
+                    app.rebuild()
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/feedback":
                     with open(app.log, "a") as fh:
                         fh.write(json.dumps({"t": time.time(), "sid": b.get("session"), "feedback": b.get("value")}) + "\n")

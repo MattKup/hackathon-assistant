@@ -33,6 +33,7 @@ def step(name, resp):
     return resp
 
 
+step("0. сброс демо-данных", call("/api/admin/reset-demo", {}))
 Q1 = "Техническая дирекция: можно ли начать работы по гарантийному письму заказчика до подписания договора?"
 r = step("1. кейс 1: вопрос без прямого ответа в регламенте", call("/api/ask", {"session": "s1", "question": Q1, "employee": "ivanov@example.test"}))
 if r.get("outcome") != "escalate":
