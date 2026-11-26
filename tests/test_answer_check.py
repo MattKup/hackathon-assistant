@@ -46,6 +46,16 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(len(out["steps"]), 1)
         self.assertTrue(out["steps"][0]["quote_repaired"])
 
+    def test_step_added_from_question_rejected(self):
+        w = [{**W[0], "clause": "8.3", "text": "8.3. Приступать к выполнению работ без подписанного договора запрещается."}]
+        q = "Техническая дирекция: можно ли начать работы по гарантийному письму заказчика до подписания договора?"
+        bad = {"verdict": "answer_with_caveat", "summary": "", "caveat": "", "missing": "", "steps": [
+            {"text": "Убедитесь, что договор не подписан, и проверьте наличие гарантийного письма.", "who": "", "deadline": "",
+             "ref": "w1", "quote": "Приступать к выполнению работ без подписанного договора запрещается"}]}
+        self.assertEqual(check(bad, w, q)["rejected"][0]["reason"], "added_from_question")
+        good = {**bad, "steps": [{**bad["steps"][0], "text": "Без подписанного договора приступать к работам запрещено."}]}
+        self.assertEqual(len(check(good, w, q)["steps"]), 1)
+
     def test_user_prompt_has_clause(self):
         self.assertIn("п. 1.5", build_user("q", W, "ДБРЦТ"))
 

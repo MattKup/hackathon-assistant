@@ -91,8 +91,19 @@ def outcome_of(results):
     return "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
 
 
+PRACTICE_COVERS = 0.5      # подтверждённая практика СК с таким скором в контексте дирекции — случай уже разобран экспертом
+
+
+def practice_covers(r):
+    """Кейс 3: после подтверждения эксперта тот же вопрос не должен снова уходить письмом в СК."""
+    if any(st.get("doc_title", "").startswith("Практика") for st in r["result"].get("steps", [])):
+        return True
+    return any(w.get("kind") == "practice" and w.get("score", 0) >= PRACTICE_COVERS for w in r.get("windows") or [])
+
+
 def not_covered(results):
-    return any(r["result"]["verdict"] != "no_answer" and r["result"].get("case_covered") is False for r in results)
+    return any(r["result"]["verdict"] == "answer_with_caveat" and r["result"].get("case_covered") is False
+               and not practice_covers(r) for r in results)
 
 
 def in_scope_llm(llm, question):

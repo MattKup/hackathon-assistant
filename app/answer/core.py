@@ -45,7 +45,22 @@ def repair_quote(quote, text, min_overlap=0.8):
     return best if score >= min_overlap else None
 
 
-def check(raw, windows):
+STOP = {"можно", "нужно", "какой", "какие", "какая", "каким", "когда", "сколько", "который", "проект", "проекта",
+        "работы", "работ", "заказчика", "договора", "дирекции", "дирекция", "регламент", "регламенте", "если"}
+
+
+def stems(text):
+    return {w[:4] for w in re.findall(r"[а-яё]{5,}", norm(text)) if w not in STOP}
+
+
+def added_from_question(step_text, window_text, question):
+    """Слова вопроса, которые модель перенесла в шаг, хотя в пункте их нет (26.11: «проверьте наличие
+    гарантийного письма (п. 8.3)» — в п. 8.3 о письме ни слова). ≥ 2 таких основ — шаг дополнен из вопроса."""
+    return sorted((stems(step_text) & stems(question)) - stems(window_text))
+
+
+def check(raw, windows, question=""):
+    q = question.split("\n\n")[0]
     out = {**raw, "steps": [], "rejected": []}
     for st in raw.get("steps", []):
         m = re.fullmatch(r"w(\d+)", st.get("ref", ""))
@@ -64,6 +79,8 @@ def check(raw, windows):
                 nums_step = set(NUM.findall(st.get("text", "") + " " + st.get("deadline", "")))
                 if nums_step - set(NUM.findall(w["text"])):
                     reason = "number_not_in_source"
+                elif q and w.get("kind") != "practice" and len(added_from_question(st.get("text", ""), w["text"], q)) >= 2:
+                    reason = "added_from_question"
         if reason:
             out["rejected"].append({**st, "reason": reason})
         else:
@@ -80,4 +97,4 @@ def check(raw, windows):
 
 def answer(llm, question, windows, dept_label):
     raw, meta = llm.chat_json(SYSTEM, build_user(question, windows, dept_label), SCHEMA)
-    return check(raw, windows), meta
+    return check(raw, windows, question), meta

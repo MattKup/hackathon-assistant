@@ -160,6 +160,12 @@ class DialogTest(unittest.TestCase):
         self.assertEqual(t.outcome, "conflict")
         self.assertEqual(t.route["why"], "противоречие между пунктами регламента")
 
+    def test_practice_covers_case(self):
+        prac = {**win("dbr", "P1", "Старт по гарантийному письму согласует директор дирекции.", 0.9), "kind": "practice"}
+        llm = FakeLLM({"ДБРЦТ": "answer_with_caveat"}, extra={"ДБРЦТ": {"case_covered": False}})
+        t = run_turn("ДБРЦТ: можно стартовать по гарантийному письму?", REG, search_for([prac] + WINS), llm, session={})
+        self.assertFalse(t.route and t.route.get("email"))
+
     def test_vague_offers_topics(self):
         sess = {}
         t = run_turn("а что со сроками?", REG, search_for(WINS), FakeLLM({}, vague=True), session=sess)
