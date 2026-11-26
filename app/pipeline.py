@@ -54,6 +54,13 @@ class Turn:
     external_refs: list = field(default_factory=list)
 
 
+def plural(n, one, few, many):
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    return one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many
+
+
 def strip_departments(question):
     """Названия подразделений мешают поиску внутри документа одного подразделения."""
     q = question
@@ -87,11 +94,11 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
     session = session or {}
     tr = []
     if TASK_VERBS.search(question):
-        tr.append("тип: просьба выполнить работу → отказ")
+        tr.append("Это просьба выполнить работу, а не вопрос по регламентам — отказ")
         return Turn("task_refusal", "Я отвечаю только на вопросы по регламентам компании. Для таких задач в компании есть другие инструменты.",
                     route=route_for(question), trace=tr)
     if OUT_OF_SCOPE.search(question):
-        tr.append("тип: вне регламентов → отказ с маршрутом")
+        tr.append("Вопрос не про регламенты — подсказываю, куда обратиться")
         r = route_for(question)
         return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr)
 
@@ -99,10 +106,10 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
     u, _ = understand(llm, question)
     # исходная формулировка всегда в поиске: переписывание может увести в сторону (26.11: «заявка» → «РТЗ»)
     queries = list(dict.fromkeys([strip_departments(question)] + [strip_departments(x) for x in u["queries"]]))[:4]
-    tr.append("разбор вопроса: " + " | ".join(queries))
+    tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
     named = mentioned(question, registry) or _docs_for(set(u.get("departments") or []), u.get("stage", ""), registry)
     if named:
-        tr.append("подразделение названо в вопросе")
+        tr.append("Дирекция названа в вопросе")
     scope = list(session.get("docs") or named or [d["doc_id"] for d in registry])
 
     # 2. поиск по каждому документу и каждому запросу — параллельно
@@ -122,7 +129,7 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         per_doc = dict(ex.map(doc_hits, scope))
     hits = sorted([h for hs in per_doc.values() for h in hs], key=lambda h: -h["score"])
     best = hits[0]["score"] if hits else 0
-    tr.append(f"поиск: {len(scope)} документ(а), {len(queries)} запрос(а), лучший скор {best:.2f}")
+    tr.append(f"Искал в {len(scope)} {plural(len(scope), 'регламенте', 'регламентах', 'регламентах')} по {len(queries)} {plural(len(queries), 'формулировке', 'формулировкам', 'формулировкам')}")
     by_id = {x["doc_id"]: x for x in registry}
 
     if best < NO_SUPPORT:
@@ -132,10 +139,10 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         except Exception:
             in_scope = True
         if not in_scope:
-            tr.append("опоры нет, вопрос не про процессы компании → отказ с маршрутом")
+            tr.append("Подходящих пунктов нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
             r = route_for(question)
             return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
-        tr.append("опоры в регламентах нет → письмо в службу качества")
+        tr.append("Подходящих пунктов в регламентах нет — отправляю вопрос в службу качества")
         return Turn("escalate", "В регламентах нет ответа на этот вопрос. Я отправил вопрос в службу качества, вы в копии — ответ придёт на почту.",
                     route={"to": "служба качества", "email": True}, trace=tr, hits=hits)
 
@@ -149,7 +156,7 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
             sec = f"раздел {h['section']} «{h['section_title']}», п. {h['clause']}"
             if dd and sec not in dd["sections"]:
                 dd["sections"].append(sec)
-        tr.append(f"тип: где регламент → {len(docs_found)} документ(а)")
+        tr.append(f"Вопрос о том, где описано, — нашёл {len(docs_found)} {plural(len(docs_found), 'документ', 'документа', 'документов')}")
         return Turn("document", "Это описано здесь:", documents=docs_found, trace=tr, hits=hits)
 
     # 3. уточнять ли дирекцию — по лучшему скору документов каждой дирекции (стадию система выбирает сама)
@@ -160,14 +167,14 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
             dept_best[dep] = max(dept_best.get(dep, 0), hs[0]["score"])
     if session.get("docs") or named:
         depts = sorted({by_id[d]["department"] for d in scope}, key=lambda x: -dept_best.get(x, 0))
-        tr.append("дирекция: " + ("выбрана в диалоге" if session.get("docs") else "названа в вопросе"))
+        tr.append("Дирекция " + ("выбрана вами" if session.get("docs") else "названа в вопросе"))
     else:
         floor = max(CLARIFY_FLOOR, CLARIFY_RATIO * best)
         depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= floor]
-        tr.append(f"дирекций с опорой в регламентах: {len(depts)}")
+        tr.append(f"Порядок есть в регламентах {len(depts)} {plural(len(depts), 'дирекции', 'дирекций', 'дирекций')}" + (" и отличается — уточняю дирекцию" if len(depts) >= 2 else ""))
         if len(depts) >= 2 and session.get("clarifications", 0) < 2:
             opts = [{"doc_id": dep, "department": dep, "label": DEPT_NAMES.get(dep, dep)} for dep in depts]
-            return Turn("clarify", "В дирекциях это устроено по-разному. О какой дирекции речь?",
+            return Turn("clarify", "Ответ зависит от дирекции. Какая дирекция ведёт проект?",
                         options=opts + [{"doc_id": "*", "label": "Проект нескольких дирекций"}, {"doc_id": "?", "label": "Не знаю"}],
                         trace=tr, hits=hits)
         depts = depts[:1] or [by_id[hits[0]["doc_id"]]["department"]]
@@ -187,16 +194,21 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
     for r in results:
-        tr.append(f"ответ {r['label']}: {r['result']['verdict']}, шагов {len(r['result']['steps'])}, отклонено {len(r['result']['rejected'])}; "
-                  f"пункты: {', '.join(r['meta'].get('clauses_seen', [])[:10])}")
+        res = r["result"]
+        verdict = {"answer": "ответ", "answer_with_caveat": "ответ с оговоркой", "conflict": "противоречие",
+                   "no_answer": "прямого ответа нет"}.get(res["verdict"], res["verdict"])
+        n, rej = len(res["steps"]), len(res["rejected"])
+        tr.append(f"{r['label']}: {verdict}" + (f", {n} {plural(n, 'шаг', 'шага', 'шагов')} со ссылками на пункты" if n else "")
+                  + (f"; {rej} {plural(rej, 'утверждение отброшено', 'утверждения отброшены', 'утверждений отброшено')} проверкой цитат" if rej else "; все цитаты сверены с текстом"))
+        r["meta"]["trace_debug"] = f"пункты в контексте: {', '.join(r['meta'].get('clauses_seen', []))}"
     verdicts = [r["result"]["verdict"] for r in results]
     ext = sorted({ref for h in hits[:5] for ref in h.get("external_refs", [])})
     if all(v == "no_answer" for v in verdicts) and ext:
-        tr.append("ответ стоит за отсылкой к документу вне базы → называем документ")
+        tr.append("Пункт отсылает к документу, которого нет в базе, — называю его")
         return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: " + "; ".join(ext),
                     answers=results, trace=tr, hits=hits, external_refs=ext)
     if all(v == "no_answer" for v in verdicts):
-        tr.append("в найденных пунктах ответа нет → письмо в службу качества")
+        tr.append("В найденных пунктах ответа нет — отправляю вопрос в службу качества")
         return Turn("escalate", "В регламентах прямого ответа нет. Я отправил вопрос в службу качества, вы в копии.",
                     route={"to": "служба качества", "email": True}, answers=results, trace=tr, hits=hits)
     outcome = "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
