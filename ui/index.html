@@ -169,6 +169,7 @@ nav button{padding:7px 10px}
     <button data-p="docs">Документы</button>
     <button data-p="cases" class="qa hide">Обращения<span class="cnt hide" id="cnt"></span></button>
     <button data-p="know" class="qa hide">Знания</button>
+    <button data-p="conf" class="qa hide">Противоречия<span class="cnt hide" id="confCnt"></span></button>
     <button data-p="stats" class="qa hide">Аналитика</button>
     <button data-p="about">О системе</button>
   </nav>
@@ -236,6 +237,14 @@ nav button{padding:7px 10px}
   <div class="card"><div class="hd"><b>Карточки знаний</b><span class="sub" id="knowCount"></span></div><div id="knowList"></div></div>
 </section>
 
+<section id="p-conf" class="hide">
+  <div class="ph"><div><h1>Противоречия</h1><p>Пары пунктов, которые расходятся между собой. Кандидатов находит анализатор (ночью) или разбор ответов; в ответах помощника участвуют только подтверждённые службой качества</p></div></div>
+  <div class="kpis" id="confKpis"></div>
+  <div class="card"><div class="hd"><b>Пары пунктов</b><span class="sub" id="confSub"></span>
+    <select class="pill ml" id="confFilter"><option value="candidate">Ждут решения</option><option value="confirmed">Подтверждённые</option><option value="rejected">Не противоречие</option><option value="">Все</option></select></div>
+    <div id="confList"></div></div>
+</section>
+
 <section id="p-stats" class="hide">
   <div class="ph"><div><h1>Аналитика</h1><p>Что спрашивают сотрудники и где базе регламентов нужны улучшения</p></div></div>
   <div class="kpis" id="statKpis"></div>
@@ -281,10 +290,10 @@ let session = null, notes = [], qa = false;
 const api = (u, b) => fetch(u, b === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(b)}).then(r => r.json());
 
 function go(p){ $$("#nav button").forEach(b => b.classList.toggle("on", b.dataset.p === p)); $$("main>section").forEach(s => s.classList.toggle("hide", s.id !== "p-" + p));
-  ({docs:loadDocs, cases:loadCases, know:loadKnow, stats:loadStats, about:loadAbout})[p]?.(); }
+  ({docs:loadDocs, cases:loadCases, know:loadKnow, conf:loadConf, stats:loadStats, about:loadAbout})[p]?.(); }
 $$("#nav button").forEach(b => b.onclick = () => go(b.dataset.p));
 $("#role").onchange = () => { qa = $("#role").value === "qa"; $$(".qa").forEach(x => x.classList.toggle("hide", !qa));
-  const cur = $("#nav button.on").dataset.p; go(!qa && ["cases","know","stats"].includes(cur) ? "ask" : cur); if (qa) loadCount(); };
+  const cur = $("#nav button.on").dataset.p; go(!qa && ["cases","know","conf","stats"].includes(cur) ? "ask" : cur); if (qa) loadCount(); };
 
 $$(".examples button").forEach(b => b.onclick = () => ask(b.textContent));
 $("#askForm").onsubmit = e => { e.preventDefault(); const v = $("#q").value.trim(); if (v) { $("#q").value = ""; ask(v); } };
@@ -435,6 +444,32 @@ async function loadKnow(){
     await api("/api/qa/approve", {practice_id:id, question:$(`[data-q="${id}"]`).value, answer:$(`[data-a="${id}"]`).value, applies_to:$$(`[data-d="${id}"]:checked`).map(i => i.value)}); loadKnow(); });
   $$("[data-rv]").forEach(b => b.onclick = async () => { await api("/api/qa/revoke", {practice_id:b.dataset.rv}); loadKnow(); });
 }
+
+const KST = {candidate:["Ждёт решения","a"], confirmed:["Подтверждено","r"], rejected:["Не противоречие",""]};
+const KKIND = {contradiction:"противоречие", possible:"возможное противоречие"};
+async function loadConf(){
+  const all = await api("/api/conflicts"), f = $("#confFilter").value, rows = f ? all.filter(x => x.status === f) : all;
+  const n = st => all.filter(x => x.status === st).length, cand = n("candidate");
+  $("#confCnt").textContent = cand; $("#confCnt").classList.toggle("hide", !cand);
+  $("#confKpis").innerHTML = kpi("Ждут решения", cand) + kpi("Подтверждено", n("confirmed"), "применяются в ответах")
+    + kpi("Не противоречие", n("rejected")) + kpi("Текст пункта изменился", all.filter(x => x.status === "confirmed" && !x.current).length, "нужно подтвердить заново");
+  $("#confSub").textContent = `${rows.length} из ${all.length}`;
+  const side = (t, c, q) => `<div class="lbl">${esc(t)} · п. ${esc(c)}</div><pre>${esc(q)}</pre>`;
+  $("#confList").innerHTML = rows.length ? rows.map(x => { const [st, cl] = KST[x.status] || [x.status, ""]; return `<div class="mailcard">
+    <div style="display:flex;gap:10px;align-items:center"><b>п. ${esc(x.clause_a)} ↔ п. ${esc(x.clause_b)}</b><span class="meta">${esc(KKIND[x.kind] || x.kind)} · источник: ${esc(x.source)}</span>
+      ${x.current ? "" : `<span class="badge r">текст пункта изменился</span>`}<span class="badge ${cl} ml">${st}</span></div>
+    ${side(x.title_a, x.clause_a, x.quote_a)}${side(x.title_b, x.clause_b, x.quote_b)}
+    ${x.situation || x.explanation ? `<div class="note">${x.situation ? `<b>Ситуация:</b> ${esc(x.situation)}<br>` : ""}${esc(x.explanation)}</div>` : ""}
+    ${x.status === "candidate" ? `<textarea data-kc="${x.pair_id}" placeholder="Комментарий службы качества (необязательно)…"></textarea>
+      <div class="foot"><button class="btn" data-kd="confirm" data-k="${x.pair_id}">Подтвердить противоречие</button><button class="btn ghost" data-kd="reject" data-k="${x.pair_id}">Не противоречие</button>
+        <span class="meta">подтверждённое помощник покажет сотруднику: оба пункта и письмо в службу качества</span></div>`
+    : `<div class="foot meta">${esc(x.decided_by || "")} · ${x.decided_at ? new Date(x.decided_at*1000).toLocaleString("ru") : ""}${x.comment ? " · " + esc(x.comment) : ""}
+        <button class="btn ghost ml" data-kd="reopen" data-k="${x.pair_id}">Вернуть на решение</button></div>`}</div>`; }).join("")
+    : `<div class="empty">Нет пар в этом списке</div>`;
+  $$("[data-kd]").forEach(b => b.onclick = async () => { b.disabled = true;
+    await api("/api/conflicts/decide", {pair_id:b.dataset.k, decision:b.dataset.kd, comment:$(`[data-kc="${b.dataset.k}"]`)?.value || ""}); loadConf(); });
+}
+$("#confFilter").onchange = loadConf;
 
 async function loadStats(){
   const a = await api("/api/analytics"), o = a.by_outcome || {}, tot = a.questions || 0;

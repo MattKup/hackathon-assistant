@@ -14,6 +14,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from app.analysis.registry import ConflictRegistry
 from app.answer.cache import AnswerCache
 from app.dialog.clarify import label
 from app.escalation import draft as qa_draft
@@ -68,6 +69,11 @@ class App:
         self.registry, wins = build_registry(Path(corpus), data / "index")
         self.windows = [w.to_dict() for w in wins]
         self.store = Store(str(data / "app.sqlite"))
+        self.conflict_reg = ConflictRegistry(str(data / "app.sqlite"))   # кандидаты анализатора и решения СК
+        manual = ROOT / "config" / "conflicts_candidates_manual.json"   # найденные человеком — тоже только кандидаты
+        if manual.exists():
+            m = json.loads(manual.read_text())
+            self.conflict_reg.import_manual(m.get("pairs", []), self.windows, m.get("source", "вручную"))
         self.lock = threading.Lock()
         self.answer_cache = AnswerCache()
         self.uploads = Uploads(str(data / "uploads.sqlite"), data / "uploads", os.environ.get("DOC_INTEL_URL", ""),
@@ -227,7 +233,7 @@ class App:
             s.pop("ask", None)
         t0 = time.time()
         if getattr(self, "conflicts", None) is None:
-            self.conflicts = load_conflicts(self.windows)          # реестр подтверждённых противоречий
+            self.conflicts = load_conflicts(self.windows, self.conflict_reg.confirmed())   # только подтверждённые СК
             self.index = build_index(self.windows)                  # пункты по номеру — для агентного прохода
         turn = run_turn(q, self.registry, self.search, self.llm, session=s, answer_cache=self.answer_cache,
                         conflicts=self.conflicts, index=self.index)   # s хранит кэш ответов по дирекциям для второго хода
@@ -352,6 +358,10 @@ def make_handler(app):
             if self.path == "/api/quality":
                 f = UI / "quality.json"
                 return self._json(200, json.loads(f.read_text()) if f.exists() else {})
+            if self.path.startswith("/api/conflicts"):
+                from urllib.parse import parse_qs, urlparse
+                st = (parse_qs(urlparse(self.path).query).get("status") or [None])[0]
+                return self._json(200, app.conflict_reg.pairs(st if st in ("candidate", "confirmed", "rejected") else None, app.windows))
             if self.path == "/api/cases":
                 return self._json(200, app.store.cases())
             if self.path == "/api/practices":
@@ -413,6 +423,15 @@ def make_handler(app):
                     app.store.approve(b["practice_id"], b.get("who", "служба качества"), b.get("question"), b.get("answer"), b.get("applies_to"))
                     app.rebuild()
                     return self._json(200, {"ok": True})
+                if self.path == "/api/conflicts/decide":   # служба качества: «Подтвердить» / «Не противоречие» / «Вернуть»
+                    if b.get("decision") not in ("confirm", "reject", "reopen"):
+                        return self._json(400, {"error": "decision: confirm | reject | reopen"})
+                    app.conflict_reg.decide(b["pair_id"], b["decision"], b.get("who") or "служба качества", b.get("comment", ""))
+                    app.conflicts = None                  # перечитать подтверждённые пары
+                    app.answer_cache.invalidate()         # сохранённые ответы могли не учитывать противоречие
+                    return self._json(200, {"ok": True})
+                if self.path == "/api/conflicts/import":   # отчёт ночного анализатора (conflicts.json) → кандидаты
+                    return self._json(200, app.conflict_reg.import_report(b, app.windows, b.get("source") or "анализатор противоречий"))
                 if self.path == "/api/qa/revoke":
                     app.store.revoke(b["practice_id"], b.get("who", "qa"))
                     app.rebuild()

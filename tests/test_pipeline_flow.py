@@ -270,21 +270,30 @@ class UniversalTest(unittest.TestCase):
         self.assertEqual([a["label"] for a in t.answers], ["Юридический департамент"])
 
 
+def _registry_with_pair(ws, confirm=True, text_b="Заявку подают за пять рабочих дней."):
+    """Реестр в памяти: кандидат DBRCT 1.5↔1.6 (как от анализатора), по желанию — подтверждён СК."""
+    from app.analysis.registry import ConflictRegistry
+    reg = ConflictRegistry(":memory:")
+    rep = {"findings": [{"kind": "contradiction", "relation": "same_doc", "explanation": "разные сроки подачи заявки",
+                         "a": {"doc_id": "dbr", "clause": "1.5", "quote": WINS[1]["text"][:30]},
+                         "b": {"doc_id": "dbr", "clause": "1.6", "quote": text_b[:20]}}]}
+    reg.import_report(rep, ws)
+    pid = reg.pairs()[0]["pair_id"]
+    if confirm:
+        reg.decide(pid, "confirm", "Иванова (СК)", "сверено с текстом")
+    return reg, pid
+
+
 class KnownConflictTest(unittest.TestCase):
     def test_answer_on_conflicting_clause_becomes_conflict_with_letter(self):
         from app.pipeline import load_conflicts
-        import json
-        import tempfile
-        from pathlib import Path
-        f = Path(tempfile.mkdtemp()) / "c.json"
-        f.write_text(json.dumps({"pairs": [{"department": "DBRCT", "a": "1.5", "b": "1.6", "why": "разные сроки"}]}))
         ws = WINS + [win("dbr", "1.6", "Заявку подают за пять рабочих дней.", 0.3)]
-        conf = load_conflicts(ws, f)
+        reg, _ = _registry_with_pair(ws)
+        conf = load_conflicts(ws, reg.confirmed())
         t = run_turn("ДБРЦТ: за сколько подавать заявку?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}), session={}, conflicts=conf)
         self.assertEqual(t.outcome, "conflict")
         self.assertEqual(t.answers[0]["result"]["conflict_with"][0]["clause"], "1.6")
         self.assertTrue(t.route["email"])
-
 
 class SameAcrossTest(unittest.TestCase):
     class SameLLM(FakeLLM):
@@ -348,36 +357,69 @@ class ExternalRefInBaseTest(unittest.TestCase):
 
 
 class ConflictRegistryTest(unittest.TestCase):
+    """Поток: анализатор → кандидат → решение СК → ассистент применяет только подтверждённые, актуальные и по теме."""
     def setUp(self):
-        import json
-        import tempfile
-        from pathlib import Path
-        from app.pipeline import text_hash
         self.ws = WINS + [win("dbr", "1.6", "Заявку подают за пять рабочих дней.", 0.3)]
-        self.f = Path(tempfile.mkdtemp()) / "c.json"
-        self.pair = {"department": "DBRCT", "a": "1.5", "b": "1.6", "why": "разные сроки подачи заявки",
-                     "hash_a": text_hash(WINS[1]["text"]), "hash_b": text_hash("Заявку подают за пять рабочих дней.")}
-        self.json, self.Path = json, Path
 
-    def conf(self, pair):
+    def conf(self, reg, ws=None):
         from app.pipeline import load_conflicts
-        self.f.write_text(self.json.dumps({"pairs": [pair]}))
         log = []
-        return load_conflicts(self.ws, self.f, log), log
+        return load_conflicts(ws or self.ws, reg.confirmed(), log), log
 
-    def test_changed_text_not_applied(self):
-        c, log = self.conf({**self.pair, "hash_b": "000000000000"})
+    def test_candidate_not_applied_until_confirmed(self):
+        reg, pid = _registry_with_pair(self.ws, confirm=False)
+        self.assertEqual(reg.pairs()[0]["status"], "candidate")
+        self.assertEqual(self.conf(reg)[0], {})
+        reg.decide(pid, "confirm", "СК")
+        self.assertTrue(self.conf(reg)[0])
+        row = reg.pairs("confirmed")[0]
+        self.assertEqual(row["decided_by"], "СК")
+        self.assertTrue(row["decided_at"])
+
+    def test_rejected_not_applied_and_not_resurrected_by_next_night(self):
+        reg, pid = _registry_with_pair(self.ws, confirm=False)
+        reg.decide(pid, "reject", "СК", "это последовательные шаги, не противоречие")
+        rep = {"findings": [{"kind": "contradiction", "a": {"doc_id": "dbr", "clause": "1.6", "quote": "x"},
+                             "b": {"doc_id": "dbr", "clause": "1.5", "quote": "y"}}]}
+        self.assertEqual(reg.import_report(rep, self.ws)["added"], 0)     # та же пара в другом порядке — не дубль
+        self.assertEqual([r["status"] for r in reg.pairs()], ["rejected"])
+        self.assertEqual(self.conf(reg)[0], {})
+
+    def test_dept_difference_not_a_candidate(self):
+        from app.analysis.registry import ConflictRegistry
+        reg = ConflictRegistry(":memory:")
+        rep = {"findings": [{"kind": "dept_difference", "a": {"doc_id": "dbr", "clause": "1.5", "quote": "x"},
+                             "b": {"doc_id": "dbr", "clause": "1.6", "quote": "y"}}]}
+        self.assertEqual(reg.import_report(rep, self.ws)["added"], 0)
+
+    def test_changed_text_not_applied_and_new_candidate(self):
+        reg, _ = _registry_with_pair(self.ws)
+        ws2 = WINS + [win("dbr", "1.6", "Заявку подают за десять рабочих дней.", 0.3)]
+        c, log = self.conf(reg, ws2)
         self.assertEqual(c, {})
         self.assertTrue(log)
+        self.assertFalse(reg.pairs(windows=ws2)[0]["current"])
+        rep = {"findings": [{"kind": "contradiction", "a": {"doc_id": "dbr", "clause": "1.5", "quote": "x"},
+                             "b": {"doc_id": "dbr", "clause": "1.6", "quote": "y"}}]}
+        self.assertEqual(reg.import_report(rep, ws2)["added"], 1)        # новая редакция — снова на подтверждение
+
+    def test_manual_pairs_are_candidates(self):
+        from app.analysis.registry import ConflictRegistry
+        reg = ConflictRegistry(":memory:")
+        reg.import_manual([{"department": "DBRCT", "a": "1.5", "b": "1.6", "why": "разные сроки"}], self.ws, "разбор ответов")
+        self.assertEqual([r["status"] for r in reg.pairs()], ["candidate"])
+        self.assertEqual(self.conf(reg)[0], {})
 
     def test_off_topic_not_applied(self):
-        c, _ = self.conf(self.pair)
+        reg, _ = _registry_with_pair(self.ws)
+        c, _ = self.conf(reg)
         t = run_turn("ДБРЦТ: кто проводит установочное совещание с командой?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}),
                      session={}, conflicts=c)
         self.assertNotEqual(t.outcome, "conflict")
 
     def test_on_topic_applied_with_pair_id(self):
-        c, _ = self.conf(self.pair)
+        reg, _ = _registry_with_pair(self.ws)
+        c, _ = self.conf(reg)
         t = run_turn("ДБРЦТ: за сколько подавать заявку?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}), session={}, conflicts=c)
         self.assertEqual(t.outcome, "conflict")
         self.assertIn("DBRCT:1.5↔1.6", t.route["why"])

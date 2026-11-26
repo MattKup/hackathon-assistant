@@ -2,7 +2,7 @@
 
 Аргументы: <папка корпуса в INBOX_DIR> [бюджет пар] [k=8] [k_cross=3] [workers=6] [cross_share=0.2]
            [changed=<префикс doc_id>,...] [prev=<metrics.json|conflicts.json прошлого прогона в INBOX_DIR>]
-           [--no-dense] [--offline]
+           [db=<app.sqlite сервера: кандидаты сразу в реестр>] [--no-dense] [--offline]
 
 Режимы:
   ночной (по умолчанию, без числа бюджета) — «точность выше стоимости»: все пары после расширенного фильтра,
@@ -60,6 +60,9 @@ def main(corpus_rel, *rest):
                   workers=int(kv.get("workers", 6 if night else 4)), log=lambda *a: print(*a, flush=True),
                   night=night and llm is not None, changed=changed)
     write_outputs(rep, run_dir)
+    if kv.get("db"):              # кандидаты — сразу в реестр сервера (служба качества подтверждает на странице «Противоречия»)
+        from app.analysis.registry import ConflictRegistry
+        print("реестр:", ConflictRegistry(kv["db"]).import_report(rep, windows), flush=True)
     m = {**rep["metrics"], "corpus": corpus_rel, "model": os.environ.get("LLM_MODEL", "qwen38") if llm else None}
     (run_dir / "metrics.json").write_text(json.dumps(m, ensure_ascii=False, indent=2))
     print(json.dumps({k: v for k, v in m.items() if k != "doc_ids"}, ensure_ascii=False, indent=2))

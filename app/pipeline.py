@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from concurrent.futures import ThreadPoolExecutor
 
+from app.analysis.registry import clause_texts, text_hash
 from app.answer.cache import norm_q
 from app.answer.core import SYSTEM as ANSWER_SYSTEM, answer as llm_answer, build_user
 from app.answer.understand import understand
@@ -113,40 +114,27 @@ CONFLICT = ("Пункты регламента здесь противореча
             "вы в копии. Ниже — оба пункта.")
 
 
-def text_hash(text):
-    """Отпечаток текста пункта: пара противоречия подтверждена для ЭТОГО текста; перенумерация или новая редакция —
-    отпечаток не совпал → пара не срабатывает, пока служба качества не подтвердит заново (ревью Fable)."""
-    import hashlib
-    return hashlib.sha1(re.sub(r"\s+", " ", text.lower().replace("ё", "е")).strip()[:600].encode()).hexdigest()[:12]
-
-
-def load_conflicts(windows, path=None, log=None):
-    """Реестр подтверждённых противоречий (config/conflicts_confirmed.json) → {(doc_id, пункт): [пара…]}.
-    Ключ — документ, а не подразделение (у ИБ два документа с совпадающими номерами пунктов)."""
-    import json
-    from pathlib import Path
-    path = Path(path) if path else Path(__file__).resolve().parents[1] / "config" / "conflicts_confirmed.json"
-    if not path.exists():
-        return {}
-    by_doc = {}
-    for w in windows:
-        by_doc.setdefault((w.get("doc_id"), w.get("department")), {}).setdefault(w.get("clause"), w)
+def load_conflicts(windows, pairs, log=None):
+    """Подтверждённые службой качества пары (app/analysis/registry.py, статус confirmed) → {(doc_id, пункт): [пара…]}.
+    Ключ — документ, а не подразделение (у ИБ два документа с совпадающими номерами пунктов). Пара применяется, только
+    если текст обоих пунктов тот же, что при подтверждении (отпечаток): новая редакция — снова на подтверждение."""
+    texts = clause_texts(windows)
     out = {}
-    for p in json.loads(path.read_text()).get("pairs", []):
-        for (doc_id, dep), cl in by_doc.items():
-            if dep != p["department"] or p["a"] not in cl or p["b"] not in cl:
-                continue
-            if p.get("doc") and p["doc"].lower() not in (cl[p["a"]].get("path", "").lower()):
-                continue
-            wa, wb = cl[p["a"]], cl[p["b"]]
-            if (p.get("hash_a") and p["hash_a"] != text_hash(wa["text"])) or (p.get("hash_b") and p["hash_b"] != text_hash(wb["text"])):
-                if log is not None:
-                    log.append(f"пара {p['a']}↔{p['b']} ({dep}) не применена: текст пункта изменился — подтвердить заново")
-                continue
-            pid = f"{dep}:{p['a']}↔{p['b']}"
-            for x, wy in ((wa, wb), (wb, wa)):
-                out.setdefault((doc_id, x["clause"]), []).append(
-                    {"clause": wy["clause"], "why": p.get("why", ""), "text": wy["text"], "pair": pid})
+    for p in pairs or []:
+        sides = []
+        for d, cl, h in ((p["doc_a"], p["clause_a"], p["hash_a"]), (p["doc_b"], p["clause_b"], p["hash_b"])):
+            ws = texts.get((d, cl))
+            t = " ".join(w["text"] for w in ws) if ws else None
+            sides.append((d, cl, t if t is not None and text_hash(t) == h else None, ws))
+        if any(t is None for _, _, t, _ in sides):
+            if log is not None:
+                log.append(f"пара {p['clause_a']}↔{p['clause_b']} ({p['pair_id']}) не применена: пункт изменился или удалён — подтвердить заново")
+            continue
+        dep = sides[0][3][0].get("department", "")
+        pid = f"{dep}:{p['clause_a']}↔{p['clause_b']}"
+        why = p.get("explanation") or ""
+        for (dx, cx, _, _), (_, cy, ty, _) in ((sides[0], sides[1]), (sides[1], sides[0])):
+            out.setdefault((dx, cx), []).append({"clause": cy, "why": why, "text": ty, "pair": pid, "pair_id": p["pair_id"]})
     return out
 
 

@@ -72,7 +72,13 @@ def main(corpus_rel, eval_rel, *rest):
     hy = Hybrid(windows, vecs, embed_c, rerank_c)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
     search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
-    conflicts, index = load_conflicts(windows), build_index(windows)
+    # реестр противоречий: применяются только пары, подтверждённые службой качества (база CONFLICTS_DB, если задана)
+    confirmed = []
+    if os.environ.get("CONFLICTS_DB"):
+        from app.analysis.registry import ConflictRegistry
+        confirmed = ConflictRegistry(os.environ["CONFLICTS_DB"]).confirmed()
+    conflicts, index = load_conflicts(windows, confirmed), build_index(windows)
+    print(f"подтверждённых противоречий: {len(confirmed)}", flush=True)
     items = [json.loads(l) for l in open(inbox / eval_rel) if l.strip()]
     if limit:
         items = items[: int(limit)]
