@@ -13,7 +13,7 @@ $SSH "mkdir -p ~/hackathon-app/code ~/hackathon-app/corpus ~/hackathon-app/data/
 git -C "$PWD" archive --format=tar HEAD | $SSH "rm -rf ~/hackathon-app/code.new && mkdir ~/hackathon-app/code.new && tar -x -C ~/hackathon-app/code.new && rm -rf ~/hackathon-app/code && mv ~/hackathon-app/code.new ~/hackathon-app/code"
 tar -C "$CORPUS" -cf - . | $SSH "rm -rf ~/hackathon-app/corpus/* && tar -x -C ~/hackathon-app/corpus"
 echo "== compose up"
-$SSH "cd ~/hackathon-app/code/deploy && docker compose up -d --remove-orphans && docker compose ps"
+$SSH "cd ~/hackathon-app/code/deploy && docker compose up -d --remove-orphans && docker compose up -d --force-recreate --no-deps assistant && docker compose ps"
 echo "== ждём /api/health"
 for i in $(seq 1 40); do
   if $SSH "curl -fsS --max-time 3 http://127.0.0.1:19650/api/health" 2>/dev/null; then echo; break; fi
@@ -23,4 +23,5 @@ echo "== пробный вопрос"
 $SSH "curl -fsS --max-time 60 -H 'Content-Type: application/json' -d '{\"question\":\"ДБРЦТ: кто создаёт заявку на пресейл?\"}' http://127.0.0.1:19650/api/ask" | python3 -c "
 import json,sys; r=json.load(sys.stdin); print('outcome:', r['outcome'], 'seconds:', r['seconds']); print(json.dumps(r['answers'][:1], ensure_ascii=False)[:600])" | tee "$RUN_DIR/probe.txt"
 $SSH "cd ~/hackathon-app/code/deploy && docker compose ps --format '{{.Name}} {{.Image}} {{.Status}}'" | tee "$RUN_DIR/ps.txt"
+$SSH "cd ~/hackathon-app/code/deploy && docker compose logs --tail 20 assistant" | tee "$RUN_DIR/assistant-log.txt"
 echo '{"deployed": true}' > "$RUN_DIR/metrics.json"
