@@ -57,7 +57,19 @@ def main(corpus_rel, eval_rel, *rest):
     for d in docs:
         dept_doc.setdefault(d["department"], []).append(d["doc_id"])
     tei = TEI(os.environ["TEI_EMBED_URL"], os.environ["TEI_RERANK_URL"])
-    hy = Hybrid(windows, tei.embed([w["path"] + "\n" + w["text"] for w in windows]), tei.embed, tei.rerank)
+    vecs = tei.embed([w["path"] + "\n" + w["text"] for w in windows])
+    tei_chars, by_step = Counter(), Counter()     # экономика: знаки, отправленные в эмбеддинги и реранкер на запрос
+
+    def embed_c(texts):
+        tei_chars["embed_chars"] += sum(len(t) for t in texts)
+        tei_chars["embed_calls"] += 1
+        return tei.embed(texts)
+
+    def rerank_c(q, texts):
+        tei_chars["rerank_chars"] += len(q) * len(texts) + sum(len(t) for t in texts)
+        tei_chars["rerank_calls"] += 1
+        return tei.rerank(q, texts)
+    hy = Hybrid(windows, vecs, embed_c, rerank_c)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
     search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
     conflicts, index = load_conflicts(windows), build_index(windows)
@@ -96,13 +108,13 @@ def main(corpus_rel, eval_rel, *rest):
                     row["turn2_choice"], row["turn2"] = t1.options[0]["label"], turn_dict(t2)
                     ok = exp in ("clarify", "compare_all") or t2.outcome in EXPECT.get(exp, {exp})
                     tok2 = t2.tokens
-                    t1.tokens = {k: t1.tokens.get(k, 0) + tok2.get(k, 0) for k in t1.tokens}
+                    t1.tokens = add_tokens(t1.tokens, tok2)
                 row["outcome_ok"] = ok
                 if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
                     alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
                     sess.update(docs=alld, clarifications=1)
                     t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
-                    t1.tokens = {k: t1.tokens.get(k, 0) + t2.tokens.get(k, 0) for k in t1.tokens}
+                    t1.tokens = add_tokens(t1.tokens, t2.tokens)
                     row["turn2_choice"] = "не знаю → все варианты"
                     row["turn2"] = turn_dict(t2)
                     row["outcome_ok"] = ok = ok and len(t2.answers) >= 2
@@ -110,14 +122,20 @@ def main(corpus_rel, eval_rel, *rest):
                     dep = e["expected"]["clarify_options"][0]
                     sess.update(docs=dept_doc.get(dep, []), clarifications=1)
                     t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
-                    t1.tokens = {k: t1.tokens.get(k, 0) + t2.tokens.get(k, 0) for k in t1.tokens}
+                    t1.tokens = add_tokens(t1.tokens, t2.tokens)
                     row["turn2_choice"] = dep
                     row["turn2"] = turn_dict(t2)
                 exp_clauses = {c["clause"] for v in (e["expected"].get("by_department") or {}).values() for c in v["citations"]}
                 got = {s["clause"] for a in (row.get("turn2") or row["turn1"])["answers"] for s in a["result"]["steps"]}
                 row["cite_hit"] = bool(exp_clauses & got) if exp_clauses else None
-                row["tokens"] = t1.tokens
-                for k, v in t1.tokens.items():
+                row["tokens"] = {**t1.tokens, "tei_chars": dict(tei_chars)}
+                for step, b in (t1.tokens.get("by_step") or {}).items():
+                    for k, v in b.items():
+                        by_step[(step, k)] += v
+                for k, v in tei_chars.items():
+                    stats["tei_" + k] += v
+                tei_chars.clear()
+                for k, v in ((k, v) for k, v in t1.tokens.items() if k != "by_step"):
                     stats["tok_" + k] += v
                 stats["asked"] += 1 if row.get("asked") else 0
                 dps = [a["meta"].get("deep") for a in (row.get("turn2") or row["turn1"])["answers"] if a["meta"].get("deep")]
@@ -146,11 +164,26 @@ def main(corpus_rel, eval_rel, *rest):
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
          "asked": stats["asked"], "deep_passes": stats["deep"], "deep_better": stats["deep_better"], "auto_mail_not_covered": stats["auto_mail"],
          "tokens_total": {k[4:]: stats[k] for k in stats if k.startswith("tok_")},
+         "tokens_by_step_per_question": {st: {k: round(by_step[(st, k)] / max(1, len(items)), 2) for k in ("calls", "prompt_tokens", "completion_tokens")}
+                                         for st in sorted({st for st, _ in by_step})},
+         "tei_per_question": {k[4:]: round(stats[k] / max(1, len(items))) for k in stats if k.startswith("tei_")},
          "tokens_per_question": {k[4:]: round(stats[k] / max(1, len(items))) for k in stats if k.startswith("tok_")},
          "by_class": {c: f"{by_class[(c, True)]}/{by_class[(c, True)] + by_class[(c, False)]}" for c in classes},
          "p50_s": times[len(times) // 2] if times else None, "p95_s": times[max(0, int(len(times) * .95) - 1)] if times else None}
     (run_dir / "metrics.json").write_text(json.dumps(m, ensure_ascii=False, indent=2))
     print(json.dumps(m, ensure_ascii=False, indent=2))
+
+
+def add_tokens(a, b):
+    out = {k: a.get(k, 0) + b.get(k, 0) for k in set(a) | set(b) if k != "by_step"}
+    steps = {}
+    for src in (a.get("by_step") or {}, b.get("by_step") or {}):
+        for st, d in src.items():
+            cur = steps.setdefault(st, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0})
+            for k, v in d.items():
+                cur[k] = cur.get(k, 0) + v
+    out["by_step"] = steps
+    return out
 
 
 def turn_dict(t):

@@ -80,17 +80,27 @@ COMPLEX_NOTE = ("\n\n(Это комплексный проект несколь�
 class Counted:
     """Считает вызовы и токены модели за ход (расчёт экономики — по ценам провайдера, решение организаторов 26.11)."""
 
+    STEPS = (("готовишь поиск", "Разбор вопроса"), ("классифицируешь", "Проверка темы"), ("Сравни ответы", "Сравнение дирекций"),
+             ("помощник сотрудников компании по внутренним регламентам", "Ответ по дирекции"))
+
     def __init__(self, llm):
-        self.llm, self.t = llm, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+        self.llm, self.t = llm, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "by_step": {}}
 
     def __getattr__(self, name):          # count_tokens и прочее — к настоящему клиенту
         return getattr(self.llm, name)
 
     def chat_json(self, *a, **kw):
         res, meta = self.llm.chat_json(*a, **kw)
+        pt, ct = (meta or {}).get("prompt_tokens") or 0, (meta or {}).get("completion_tokens") or 0
         self.t["calls"] += 1
-        self.t["prompt_tokens"] += (meta or {}).get("prompt_tokens") or 0
-        self.t["completion_tokens"] += (meta or {}).get("completion_tokens") or 0
+        self.t["prompt_tokens"] += pt
+        self.t["completion_tokens"] += ct
+        system = a[0] if a else kw.get("system", "")
+        step = next((name for key, name in self.STEPS if key in system), "Другое")
+        b = self.t["by_step"].setdefault(step, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0})
+        b["calls"] += 1
+        b["prompt_tokens"] += pt
+        b["completion_tokens"] += ct
         return res, meta
 
 
