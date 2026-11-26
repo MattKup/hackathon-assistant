@@ -58,7 +58,7 @@ def label(doc, registry):
     return name
 
 
-def decide(question, hits, registry, session_docs=None, top=10, ratio=0.35, floor=0.25):
+def decide(question, hits, registry, session_docs=None, top=10, ratio=0.2, floor=0.12):
     named = mentioned(question, registry)
     if named:
         return Decision("answer", named, reason="подразделение названо в вопросе")

@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.answer.core import answer as llm_answer
-from app.dialog.clarify import decide, label, mentioned
+from app.dialog.clarify import DEPT_ALIASES, decide, label, mentioned
 
 TASK_VERBS = re.compile(r"^\s*(?:пожалуйста,?\s*)?(сделай|напиши|составь|подготовь|проанализируй|переведи|сгенерируй|придумай|"
                         r"оформи|сформулируй|посчитай|нарисуй|разбери|собери|открой|запроси|выпиши|отправь|создай|заполни|"
@@ -19,14 +19,16 @@ FIND_DOC = re.compile(r"(как\w*|в как\w*)\s+(документ|регла�
                       r"\bкакие\s+(два|документы)\b", re.I)
 OUT_OF_SCOPE = re.compile(r"\b(марж\w*\s+(по|моей|на)\s|преми\w*|бонус\w*|kpi|курс\s+(доллар|евро|валют)\w*|"
                           r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*)", re.I)
-NO_SUPPORT = 0.12          # скор реранкера лучшего окна ниже порога → опоры нет (v1: 0.30 — слишком строго на жаргоне)
+NO_SUPPORT = 0.05          # ниже — опоры нет (v1: 0.30, v2: 0.12 — терялись верные ответы; дальше решает verdict модели)
 
 
 SCOPE_SYSTEM = ("Ты классифицируешь вопрос сотрудника. База знаний — регламенты проектной деятельности компании: "
                 "пресейл, заявки на расчёт, ТКП/КП, договоры с заказчиком и субподрядчиками, сметы, старт, ведение, "
                 "приёмка и закрытие проектов, роли (АМ, SS, РП, архитектор и т. п.). Ответь JSON: "
                 "in_scope=true, если вопрос о том, как устроены эти процессы в компании (даже если ответа может не быть); "
-                "false — если о другом (личная экономика сделки и мотивация, рынок и конкуренты, законы вообще, бытовое).")
+                "Вопросы о правилах, сроках, порогах, санкциях, контактах, ролях и процедурах компании — in_scope, даже если "
+                "ответа в регламентах может не быть. false — только если вопрос о другом: экономика конкретной сделки сотрудника "
+                "(какую маржу поставить, какая будет премия), рынок и конкуренты, законы вообще, бытовое.")
 SCOPE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["in_scope"],
                 "properties": {"in_scope": {"type": "boolean"}}}
 
@@ -42,6 +44,15 @@ class Turn:
     hits: list = field(default_factory=list)
     documents: list = field(default_factory=list)     # для «где регламент»: [{title, label, sections}]
     external_refs: list = field(default_factory=list)
+
+
+def strip_departments(question):
+    """Названия подразделений мешают поиску внутри документа одного подразделения."""
+    q = question
+    for pats in DEPT_ALIASES.values():
+        for pat in pats:
+            q = re.sub(pat, " ", q, flags=re.I)
+    return re.sub(r"\s+", " ", re.sub(r"\s*\+\s*", " ", q)).strip() or question
 
 
 def route_for(question):
@@ -104,10 +115,9 @@ def run_turn(question, registry, search_fn, llm, session=None):
                                          {"doc_id": "?", "label": "Не знаю"}], trace=tr, hits=hits)
     docs = d.doc_ids or [hits[0]["doc_id"]]
     results = []
+    q_doc = strip_departments(question)
     for doc_id in docs:
-        ws = [h for h in hits if h["doc_id"] == doc_id][:8]
-        if not ws:
-            ws = search_fn(question, {doc_id})[:8]
+        ws = search_fn(q_doc, {doc_id})[:8]          # отдельный поиск внутри документа подразделения
         doc = by_id[doc_id]
         ws = [{**w, "department_name": label(doc, registry), "doc_title": doc["display_title"]} for w in ws]
         res, meta = llm_answer(llm, question, ws, label(doc, registry))
