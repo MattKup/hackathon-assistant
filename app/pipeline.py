@@ -7,6 +7,7 @@
   out_of_scope / task_refusal — не про регламенты: отказ + куда обратиться.
 """
 import re
+import threading
 from dataclasses import dataclass, field
 
 from concurrent.futures import ThreadPoolExecutor
@@ -482,6 +483,23 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             return _final(cached, "", tr, hits, session, question, bool(session.get("complex")) or len(cached) > 1)
 
     # 1. понять вопрос (агентный шаг)
+    # скорость (ревью Fable): общий поиск по исходной формулировке идёт параллельно с разбором вопроса моделью;
+    # результаты поисков за ход кэшируются — повторный поиск той же формулировки в той же области не делается
+    _scache, _slock = {}, threading.Lock()
+
+    def search_c(q, allowed, k):
+        key = (q, frozenset(allowed) if allowed else None, k)
+        with _slock:
+            if key in _scache:
+                return _scache[key]
+        res = _search(search_fn, q, allowed, k)
+        with _slock:
+            _scache[key] = res
+        return res
+    pre_named = mentioned(question, registry)
+    pre_scope = None if not (session.get("docs") or pre_named) else set(pre_named or session.get("docs"))
+    pre = threading.Thread(target=lambda: search_c(strip_departments(question, registry), pre_scope, GLOBAL_K), daemon=True)
+    pre.start()
     uk = answer_cache.key("understand", norm_q(question)) if answer_cache else None
     u = answer_cache.get(uk) if uk else None
     if u is None:
@@ -519,7 +537,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         не вытесняется пунктами с высоким скором по другим (26.11: ДБРЦТ п. 1.5)."""
         best, rrf = {}, {}
         for qq in queries:
-            for r, h in enumerate(_search(search_fn, qq, allowed, k)):
+            for r, h in enumerate(search_c(qq, allowed, k)):
                 wid = h["window_id"]
                 rrf[wid] = rrf.get(wid, 0) + 1 / (10 + r)
                 if wid not in best or h["score"] > best[wid]["score"]:
@@ -538,6 +556,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         order = order[:k]
         return sorted((best[w] for w in order), key=lambda h: -h["score"])
 
+    pre.join(timeout=15)                     # предварительный общий поиск уже готов — merged() возьмёт его из кэша хода
     whole = not session.get("docs") and not named
     global_hits = merged(None if whole else set(scope), GLOBAL_K)
     doc_best = {}
