@@ -55,3 +55,19 @@ class SearchClarifyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuestionsIndexTest(unittest.TestCase):
+    """Г14: попадание по сгенерированному вопросу возвращает пункт-родитель (текст пункта), а не вопрос."""
+    def test_augment_collapse(self):
+        from app.search.questions import augment, collapse
+        ws = [{"window_id": "w1", "doc_id": "d", "department": "TECH", "stage": "x", "clause": "1.1", "section": "1",
+               "section_title": "s", "path": "Док", "text": "Пункт про сроки."}]
+        allw = augment(ws, {"w1": ["шеф кивнул — можно?"]})
+        self.assertEqual(len(allw), 2)
+        hits = [{**allw[1], "score": 0.9}, {**ws[0], "score": 0.4}]
+        out = collapse(hits, {"w1": ws[0]}, 5)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["text"], "Пункт про сроки.")
+        self.assertEqual(out[0]["score"], 0.9)
+        self.assertEqual(out[0]["via_q"], "шеф кивнул — можно?")

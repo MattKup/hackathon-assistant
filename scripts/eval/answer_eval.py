@@ -67,7 +67,13 @@ def main(corpus_rel, eval_rel, *rest):
     for d in docs:
         dept_doc.setdefault(d["department"], []).append(d["doc_id"])
     tei = TEI(os.environ["TEI_EMBED_URL"], os.environ["TEI_RERANK_URL"])
-    vecs = tei.embed([w["path"] + "\n" + w["text"] for w in windows])
+    qfile = next((r[12:] for r in flags if r.startswith("--questions=")), "")
+    search_windows = windows
+    if qfile:                                   # Г14: вопросы-«входы» к пунктам в индексе поиска (ответ — из текста пункта)
+        from app.search.questions import augment, load as load_q
+        search_windows = augment(windows, load_q(inbox / qfile))
+        print(f"Г14: записей-вопросов в индексе {len(search_windows) - len(windows)}", flush=True)
+    vecs = tei.embed([w["path"] + "\n" + w["text"] for w in search_windows])
     by_step = Counter()
     tei_chars, _tl = Counter(), threading.Lock()   # экономика: знаки в эмбеддинги и реранкер — итог на прогон (вопросы идут параллельно)
 
@@ -82,10 +88,14 @@ def main(corpus_rel, eval_rel, *rest):
             tei_chars["rerank_chars"] += len(q) * len(texts) + sum(len(t) for t in texts)
             tei_chars["rerank_calls"] += 1
         return tei.rerank(q, texts)
-    hy = Hybrid(windows, vecs, embed_c, rerank_c)
+    hy = Hybrid(search_windows, vecs, embed_c, rerank_c)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
-    base_search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
     by_wid = {w["window_id"]: w for w in windows}
+    if qfile:
+        from app.search.questions import collapse
+        base_search = lambda q, allowed, k=16: collapse(hy.search(q, k=k * 2, allowed=allowed)[0], by_wid, k)  # noqa: E731
+    else:
+        base_search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
     by_dc = {}
     for w in windows:
         by_dc.setdefault((w["department"], w["clause"]), w)
@@ -211,7 +221,7 @@ def main(corpus_rel, eval_rel, *rest):
     m = {"vllm_prefix_cache": ({"queries": pc1["queries"] - pc0["queries"], "hits": pc1["hits"] - pc0["hits"],
                                 "hit_rate": round((pc1["hits"] - pc0["hits"]) / max(1, pc1["queries"] - pc0["queries"]), 3)}
                                if pc0 and pc1 else None),
-         "mode": "no_clarify" if no_clarify else "clarify", "oracle": oracle, "off": os.environ.get("HK_OFF", ""), "on": os.environ.get("HK_ON", ""), "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
+         "mode": "no_clarify" if no_clarify else "clarify", "oracle": oracle, "off": os.environ.get("HK_OFF", ""), "on": os.environ.get("HK_ON", ""), "questions_file": qfile, "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
          "asked": stats["asked"], "deep_passes": stats["deep"], "deep_better": stats["deep_better"], "auto_mail_not_covered": stats["auto_mail"],
          "tokens_total": {k[4:]: stats[k] for k in stats if k.startswith("tok_")},
