@@ -183,7 +183,7 @@ nav button{padding:7px 10px}
   <div class="ph"><div><h1>Спросить</h1><p>Ответ по регламентам проектной деятельности — с точными пунктами</p></div></div>
   <div class="ask">
     <div class="card dialog">
-      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><button class="btn ghost ml" id="newChat">Новый диалог</button></div>
+      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="meta ml" title="Без уточняющих вопросов: сразу ответы по всем дирекциям"><input type="checkbox" id="noClarify"> без уточнений</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
       <div class="msgs" id="msgs">
         <div class="empty" id="empty">Спросите о пресейле, расчёте, ТКП, договоре, старте или ведении проекта.<br>Если ответа нет в регламентах — передам вопрос в службу качества.
           <div class="examples">
@@ -297,7 +297,7 @@ function add(html, who){ $("#empty")?.remove(); const d = document.createElement
 async function ask(question, choice, choiceLabel){
   add(`<span class="q">${esc(choiceLabel || question)}</span>`, "user");
   const w = add(`<span class="meta"><span class="spin"></span> Разбираю вопрос и ищу в регламентах…</span>`, "bot");
-  const r = await api("/api/ask", {session, question, choice, employee}).catch(e => ({error:String(e)}));
+  const r = await api("/api/ask", {session, question, choice, employee, no_clarify: !!$("#noClarify")?.checked}).catch(e => ({error:String(e)}));
   w.remove();
   if (r.error) return add(`<div class="caveat">Ошибка: ${esc(r.error)}</div>`, "bot");
   session = r.session; add(render(r), "bot"); bind();
@@ -320,6 +320,8 @@ function render(r){
         const who = [s.who, s.deadline].filter(Boolean).join(", ");
         return `<li>${esc(s.text)}${who ? ` <span class="who">— ${esc(who)}</span>` : ""}<sup class="fn" data-n="${n}">${n}</sup></li>`; }).join("") + `</ol>`;
       if (a.caveat) h += `<div class="caveat">⚠︎ <span>${esc(a.caveat)}</span></div>`;
+      if (a.conflict_with?.length) h += a.conflict_with.map(c => `<div class="caveat">⚖︎ <span><b>Противоречие с п. ${esc(c.clause)}:</b> ${esc(c.why)}${c.text ? `<br><i>${esc(c.text)}</i>` : ""}</span></div>`).join("");
+      if (a.deep) h += `<p class="meta">🔎 Ответ уточнён: ассистент добрал пункты по ссылкам и соседние</p>`;
       h += `</div>`;
     }
     if (r.text) h += `<p class="meta">${esc(r.text)}</p>`;
@@ -342,7 +344,7 @@ function render(r){
   }
   const nt = r.trace?.length || 0;
   h += `<details class="how"><summary>Как найден ответ · ${nt} ${plural(nt, "шаг", "шага", "шагов")}</summary><ol>${(r.trace||[]).map(t => `<li>${esc(cap(t))}</li>`).join("")}</ol></details>
-    <div class="foot meta">${String(r.seconds).replace(".", ",")} с · локальная модель · внешних запросов 0<span class="ml"></span>
+    <div class="foot meta">${String(r.seconds).replace(".", ",")} с${(r.answers||[]).length && r.answers.every(a => a.from_cache) ? " · из кэша" : ""}${r.tokens?.calls != null ? ` · вызовов модели ${r.tokens.calls}` : ""} · локальная модель · внешних запросов 0<span class="ml"></span>
       ${!["clarify","ask"].includes(r.outcome) ? `<button class="iconbtn" data-fb="up">👍</button><button class="iconbtn" data-fb="down">👎</button>` : ""}</div>`;
   return h;
 }

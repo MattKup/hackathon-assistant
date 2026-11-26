@@ -218,7 +218,11 @@ class App:
             out["answers"].append({"label": a["label"], "verdict": r["verdict"], "summary": r["summary"], "caveat": r.get("caveat", ""),
                                    "missing": r.get("missing", ""), "steps": [
                                        {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section")}
-                                       | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]]})
+                                       | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]],
+                                   "conflict_with": [{"clause": c["clause"], "why": c.get("why", ""), "text": c.get("text", "")[:600]}
+                                                     for c in r.get("conflict_with", [])],
+                                   "deep": bool((a.get("meta") or {}).get("deep", {}).get("better")),
+                                   "from_cache": bool((a.get("meta") or {}).get("from_cache"))})
         if turn.outcome in ("clarify", "ask"):
             s["pending"], s["pending_options"], s["pending_kind"] = turn.question or q, turn.options, turn.outcome
         else:
