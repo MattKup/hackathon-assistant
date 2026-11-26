@@ -38,6 +38,14 @@ class CheckTest(unittest.TestCase):
                "steps": [{"text": "x", "who": "", "deadline": "", "ref": "w1", "quote": "Заявка  должна быть инициирована."}]}
         self.assertEqual(len(check(raw, W)["steps"]), 1)
 
+    def test_near_verbatim_quote_repaired(self):
+        raw = {"verdict": "answer", "summary": "", "caveat": "", "missing": "",
+               "steps": [{"text": "x", "who": "", "deadline": "", "ref": "w1",
+                          "quote": "Заявка должна быть инициирована не менее чем за 3 рабочих дня до предложения Заказчику"}]}
+        out = check(raw, W)
+        self.assertEqual(len(out["steps"]), 1)
+        self.assertTrue(out["steps"][0]["quote_repaired"])
+
     def test_user_prompt_has_clause(self):
         self.assertIn("п. 1.5", build_user("q", W, "ДБРЦТ"))
 

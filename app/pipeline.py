@@ -10,13 +10,13 @@ import re
 from dataclasses import dataclass, field
 
 from app.answer.core import answer as llm_answer
-from app.dialog.clarify import decide, label
+from app.dialog.clarify import decide, label, mentioned
 
 TASK_VERBS = re.compile(r"^\s*(сделай|напиши|составь|подготовь|проанализируй|переведи|сгенерируй|придумай|оформи|"
                         r"сформулируй|посчитай мне|нарисуй)\b", re.I)
 OUT_OF_SCOPE = re.compile(r"\b(марж\w*\s+(по|моей|на)\s|преми\w*|бонус\w*|kpi|курс\s+(доллар|евро|валют)\w*|"
                           r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*)", re.I)
-NO_SUPPORT = 0.30          # скор реранкера лучшего окна ниже порога → опоры нет (подобрать на эталоне)
+NO_SUPPORT = 0.12          # скор реранкера лучшего окна ниже порога → опоры нет (v1: 0.30 — слишком строго на жаргоне)
 
 
 @dataclass
@@ -49,7 +49,10 @@ def run_turn(question, registry, search_fn, llm, session=None):
         tr.append("тип: вне регламентов → отказ с маршрутом")
         r = route_for(question)
         return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr)
-    allowed = set(session.get("docs") or []) or None
+    named = mentioned(question, registry)
+    if named:
+        tr.append("подразделение названо в вопросе → поиск только в его документах")
+    allowed = set(session.get("docs") or named or []) or None
     hits = search_fn(question, allowed)
     best = hits[0]["score"] if hits else 0
     tr.append(f"поиск: {len(hits)} фрагментов, лучший скор {best:.2f}")

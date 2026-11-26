@@ -27,6 +27,24 @@ def build_user(question, windows, dept_label):
     return f"Фрагменты регламентов:\n\n" + "\n\n".join(parts) + f"\n\nПодразделение: {dept_label}\n\nВопрос: {question}"
 
 
+def _sentences(text):
+    return [s for s in re.split(r"(?<=[.;:!?])\s+|\n+", text) if s.strip()]
+
+
+def repair_quote(quote, text, min_overlap=0.8):
+    """Цитата почти дословная → вернуть предложение источника, где совпадает ≥ 80 % слов цитаты."""
+    qt = [w for w in re.findall(r"\w+", norm(quote)) if len(w) > 2]
+    if not qt:
+        return None
+    best, score = None, 0.0
+    for s in _sentences(text):
+        st = set(re.findall(r"\w+", norm(s)))
+        sc = sum(1 for w in qt if w in st) / len(qt)
+        if sc > score:
+            best, score = s.strip(), sc
+    return best if score >= min_overlap else None
+
+
 def check(raw, windows):
     out = {**raw, "steps": [], "rejected": []}
     for st in raw.get("steps", []):
@@ -36,6 +54,10 @@ def check(raw, windows):
             reason = "ref_missing"
         else:
             w = windows[int(m.group(1)) - 1]
+            if st.get("quote") and norm(st["quote"]) not in norm(w["text"]):
+                fixed = repair_quote(st["quote"], w["text"])
+                if fixed:
+                    st = {**st, "quote": fixed, "quote_repaired": True}
             if not st.get("quote") or norm(st["quote"]) not in norm(w["text"]):
                 reason = "quote_not_verbatim"
             else:
