@@ -1,6 +1,7 @@
 """Агент обработки ответов СК: итоговый ли ответ → к каким подразделениям/пунктам → публикация практики.
 
-Решение владельца по публикации (п. 100): ⏳; по умолчанию — сразу с возможностью отзыва (рекомендация).
+Решение владельца 26.11 (п. 100 → вариант Б): агент готовит карточку знания, сотрудник службы качества
+подтверждает или правит её — только после этого знание попадает в базу.
 """
 import json
 
@@ -8,15 +9,19 @@ SYSTEM = ("Ты обрабатываешь письмо эксперта слу�
           "деятельности. Определи по тексту письма: is_final — это итоговый ответ на вопрос (а не «уточняю у коллег», "
           "встречный вопрос, пересылка, благодарность); answer — итоговый ответ коротко, простыми словами, без "
           "добавлений от себя; applies_to — к каким подразделениям применим ответ: список из TECH, IB, DBRCT или "
-          "['ALL'], если эксперт говорит, что для всех; outcome — practice (разъяснение практики) или "
+          "['ALL'], если эксперт говорит, что для всех; question_general — вопрос в общем виде, без частностей "
+          "сотрудника (как его зададут другие); variants — 2–4 других формулировки этого вопроса; outcome — practice (разъяснение практики) или "
           "regulation_change (эксперт говорит, что нужно изменить или дополнить регламент). Только из текста письма.")
-SCHEMA = {"type": "object", "additionalProperties": False, "required": ["is_final", "answer", "applies_to", "outcome"],
+SCHEMA = {"type": "object", "additionalProperties": False,
+          "required": ["is_final", "answer", "question_general", "variants", "applies_to", "outcome"],
           "properties": {"is_final": {"type": "boolean"}, "answer": {"type": "string", "maxLength": 800},
+                         "question_general": {"type": "string", "maxLength": 300},
+                         "variants": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 200}},
                          "applies_to": {"type": "array", "items": {"enum": ["TECH", "IB", "DBRCT", "ALL"]}, "maxItems": 3},
                          "outcome": {"enum": ["practice", "regulation_change"]}}}
 
 
-def process_replies(store, mailbox, llm, link_fn=None, autopublish=True):
+def process_replies(store, mailbox, llm, link_fn=None, autopublish=False):
     """link_fn(question, answer, applies_to) -> [{doc, clause, window_id}] — пункты регламента рядом с практикой."""
     by_msgid = {c["message_id"]: c for c in store.cases()}
     events = []
@@ -33,13 +38,15 @@ def process_replies(store, mailbox, llm, link_fn=None, autopublish=True):
             continue
         applies = ["TECH", "IB", "DBRCT"] if "ALL" in res["applies_to"] or not res["applies_to"] else res["applies_to"]
         clauses = link_fn(case["question"], res["answer"], applies) if link_fn else []
-        if autopublish:
-            pid = store.publish(case["case_id"], r["sender"], case["question"], res["answer"], applies, clauses, res["outcome"])
-            store.set_status(case["case_id"], "published")
-            events.append({"case_id": case["case_id"], "event": "published", "practice_id": pid, "outcome": res["outcome"]})
-        else:
-            store.set_status(case["case_id"], "answered")
-            events.append({"case_id": case["case_id"], "event": "awaiting_approval"})
+        qtext = res.get("question_general") or case["question"]
+        variants = [v for v in res.get("variants", []) if v.strip()]
+        if variants:
+            qtext = qtext + "\nДругие формулировки: " + "; ".join(variants)
+        pid = store.publish(case["case_id"], r["sender"], qtext, res["answer"], applies, clauses, res["outcome"],
+                            status="published" if autopublish else "draft")
+        store.set_status(case["case_id"], "published" if autopublish else "answered")
+        events.append({"case_id": case["case_id"], "event": "published" if autopublish else "draft",
+                       "practice_id": pid, "outcome": res["outcome"]})
     return events
 
 

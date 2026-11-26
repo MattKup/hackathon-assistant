@@ -6,29 +6,31 @@
 <title>Помощник по регламентам</title>
 <style>
 :root{
-  --bg:#f6f7f9; --panel:#ffffff; --ink:#16181d; --muted:#5f6673; --line:#e3e6eb;
-  --accent:#b4122d; --accent-ink:#ffffff; --soft:#f2f4f7; --ok:#1f7a4d; --warn:#9a5b00; --warn-bg:#fff6e5;
-  --quote:#f7f8fa; --chip:#eef1f5; --practice:#e9f5ee;
+  --bg:#f2f5f8; --panel:#ffffff; --ink:#212424; --muted:#697279; --line:#d2dce5;
+  --brand:#a50f2d; --ink-btn:#212424; --ink-btn-text:#ffffff; --soft:#eef2f6; --ok:#18794e; --warn:#8a5a00; --warn-bg:#fdf5e4;
+  --quote:#f6f8fa; --chip:#eef2f6; --practice:#e8f4ee; --user:#e6ebf0; --user-ink:#212424;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --bg:#111317; --panel:#181b21; --ink:#e9ebef; --muted:#9aa1ad; --line:#2a2f38;
-    --accent:#e0465e; --accent-ink:#ffffff; --soft:#1f232a; --ok:#5cc28d; --warn:#f0b44c; --warn-bg:#2b2416;
-    --quote:#1d2027; --chip:#232831; --practice:#17291f;
+    --bg:#15181a; --panel:#1c2023; --ink:#e7eaed; --muted:#9aa5ad; --line:#2c3338;
+    --brand:#d0405c; --ink-btn:#e7eaed; --ink-btn-text:#15181a; --soft:#232a2e; --ok:#5cc28d; --warn:#e9b54d; --warn-bg:#2a2416;
+    --quote:#20262a; --chip:#262d32; --practice:#17291f; --user:#2a3237; --user-ink:#e7eaed;
   }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
 header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
 header h1{font-size:16px;margin:0;font-weight:650}
-header .brand{color:var(--accent)}
+header .brand{color:var(--brand)}
+.local{font-size:12px;color:var(--ok);background:var(--practice);border-radius:999px;padding:3px 10px;white-space:nowrap}
+.role{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:5px 8px;font:inherit}
 nav{display:flex;gap:4px;margin-left:auto}
 nav button{border:0;background:none;color:var(--muted);padding:6px 10px;border-radius:8px;cursor:pointer;font:inherit}
-nav button.on{background:var(--soft);color:var(--ink)}
+nav button.on{color:var(--ink);box-shadow:inset 0 -2px 0 var(--brand);border-radius:0}
 main{max-width:860px;margin:0 auto;padding:20px 16px 140px}
 .msg{margin:14px 0}
 .user{display:flex;justify-content:flex-end}
-.user .b{background:var(--accent);color:var(--accent-ink);padding:9px 14px;border-radius:14px 14px 4px 14px;max-width:80%}
+.user .b{background:var(--user);color:var(--user-ink);padding:9px 14px;border-radius:14px 14px 4px 14px;max-width:80%}
 .bot .b{background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:14px 16px}
 .dept{margin:0 0 12px}
 .dept h3{margin:0 0 6px;font-size:14px;font-weight:650}
@@ -43,7 +45,7 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 140px}
 .practice{background:var(--practice);border-radius:10px;padding:2px 8px;font-size:12px;color:var(--ok);margin-left:6px}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .chips button{border:1px solid var(--line);background:var(--chip);color:var(--ink);padding:7px 12px;border-radius:999px;cursor:pointer;font:inherit}
-.chips button:hover{border-color:var(--accent)}
+.chips button:hover{border-color:var(--ink)}
 .chips button.multi{display:inline-flex;gap:6px;align-items:center}
 .route{background:var(--soft);border-radius:10px;padding:8px 10px;margin-top:8px;font-size:14px}
 .trace{margin-top:10px;font-size:12px;color:var(--muted)}
@@ -53,7 +55,7 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 140px}
 form.ask{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:12px 16px}
 form.ask .in{max-width:860px;margin:0 auto;display:flex;gap:8px}
 form.ask input{flex:1;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:12px;padding:12px 14px;font:inherit;min-width:0}
-form.ask button{border:0;background:var(--accent);color:var(--accent-ink);border-radius:12px;padding:0 18px;font:inherit;cursor:pointer}
+form.ask button{border:0;background:var(--ink-btn);color:var(--ink-btn-text);border-radius:12px;padding:0 18px;font:inherit;cursor:pointer}
 .empty{color:var(--muted);text-align:center;margin-top:40px}
 .empty .ex{display:flex;flex-direction:column;gap:6px;align-items:center;margin-top:12px}
 .empty .ex button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:8px 12px;cursor:pointer;font:inherit;max-width:100%}
@@ -64,7 +66,7 @@ th{color:var(--muted);font-weight:600;background:var(--soft)}
 .mail .h{font-size:13px;color:var(--muted)}
 .mail pre{white-space:pre-wrap;font:inherit;margin:8px 0}
 .mail textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--bg);color:var(--ink);font:inherit}
-.btn{border:0;background:var(--accent);color:var(--accent-ink);border-radius:10px;padding:7px 12px;cursor:pointer;font:inherit}
+.btn{border:0;background:var(--ink-btn);color:var(--ink-btn-text);border-radius:10px;padding:7px 12px;cursor:pointer;font:inherit}
 .btn.ghost{background:var(--chip);color:var(--ink)}
 .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;background:var(--chip)}
 .hide{display:none}
@@ -74,10 +76,13 @@ th{color:var(--muted);font-weight:600;background:var(--soft)}
 <body>
 <header>
   <h1><span class="brand">●</span> Помощник по регламентам</h1>
+  <select class="role" id="role"><option value="emp">Вы: Сотрудник</option><option value="qa">Вы: Служба качества</option></select>
+  <span class="local">● Локально · данные не покидают сервер</span>
   <nav>
-    <button data-tab="chat" class="on">Чат</button>
+    <button data-tab="chat" class="on">Спросить</button>
     <button data-tab="docs">Регламенты</button>
-    <button data-tab="qa">Почта СК <span class="tag" id="qaCount">0</span></button>
+    <button data-tab="qa" class="qaonly hide">Обращения <span class="tag" id="qaCount">0</span></button>
+    <button data-tab="know" class="qaonly hide">Знания</button>
   </nav>
 </header>
 
@@ -91,11 +96,15 @@ th{color:var(--muted);font-weight:600;background:var(--soft)}
 </main>
 
 <main id="docs" class="hide"><table id="docTable"><thead><tr><th>Регламент</th><th>Подразделение</th><th>Стадия</th><th>Пунктов</th><th>Статус</th></tr></thead><tbody></tbody></table>
-  <h3 style="margin-top:24px">Практика службы качества</h3><table id="prTable"><thead><tr><th>Вопрос</th><th>Ответ СК</th><th>Для кого</th><th></th></tr></thead><tbody></tbody></table></main>
+</main>
 
 <main id="qa" class="hide">
-  <p class="meta">Имитация почтового ящика службы качества (локальный почтовый сервер). Письма бота приходят сюда; ответ уходит в тот же тред, сотрудник в копии. Бот сам разбирает ответ и пополняет базу знаний.</p>
+  <p class="meta">Почтовый ящик службы качества (имитация: локальный почтовый сервер, наружу письма не уходят). Бот пишет сюда вопросы, на которые нет ответа в регламентах, сотрудник в копии. Ответьте на письмо — бот подготовит карточку знания, вы её подтвердите во вкладке «Знания».</p>
   <div id="cases"></div>
+</main>
+<main id="know" class="hide">
+  <p class="meta">Карточки знаний — ответы службы качества. В поиск попадают только подтверждённые; отозванная карточка сразу перестаёт использоваться.</p>
+  <div id="drafts"></div>
 </main>
 
 <form class="ask" id="askForm"><div class="in">
@@ -112,11 +121,14 @@ const esc = s => (s||"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&
 
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  ["chat","docs","qa"].forEach(t => $("#"+t).classList.toggle("hide", t !== b.dataset.tab));
+  ["chat","docs","qa","know"].forEach(t => $("#"+t).classList.toggle("hide", t !== b.dataset.tab));
   $("#askForm").classList.toggle("hide", b.dataset.tab !== "chat");
   if (b.dataset.tab === "docs") loadDocs();
   if (b.dataset.tab === "qa") loadCases();
+  if (b.dataset.tab === "know") loadKnow();
 });
+$("#role").onchange = () => { document.querySelectorAll(".qaonly").forEach(x => x.classList.toggle("hide", $("#role").value !== "qa"));
+  if ($("#role").value !== "qa") document.querySelector('nav button[data-tab="chat"]').click(); };
 document.querySelectorAll(".empty .ex button").forEach(b => b.onclick = () => ask(b.textContent));
 $("#askForm").onsubmit = e => { e.preventDefault(); const v = $("#q").value.trim(); if (v) { $("#q").value = ""; ask(v); } };
 
@@ -157,14 +169,15 @@ function render(r){
       if (a.caveat) h += `<div class="caveat">Оговорка: ${esc(a.caveat)}</div>`;
       h += `</div>`;
     }
-    if (r.outcome === "conflict") h += `<div class="caveat">В регламентах противоречие — уточните у службы качества.</div>`;
+    if (r.outcome === "conflict") h += `<div class="caveat">В регламентах противоречие.</div>`;
+    if (r.outcome === "answer_with_caveat" || r.outcome === "conflict") h += `<div class="chips"><button data-escalate="1">Уточнить у службы качества</button></div>`;
     if (r.external_refs && r.external_refs.length) h += `<div class="route">Подробный порядок — в отдельном документе, которого нет в базе: ${r.external_refs.map(esc).join("; ")}</div>`;
     if (notes.length) h += `<div class="notes">` + notes.map(s => `<div><b>${s.n}</b> ${esc(s.doc_title)}, п. ${esc(s.clause)}<q>${esc(s.quote)}</q></div>`).join("") + `</div>`;
   } else if (r.outcome === "document") {
     h += `<div>${esc(r.text)}</div><ul>` + r.documents.map(d => `<li><b>${esc(d.title)}</b> <span class="meta">(${esc(d.label)})</span><br><span class="meta">${d.sections.slice(0,3).map(esc).join("; ")}</span></li>`).join("") + `</ul>`;
   } else if (r.outcome === "escalate") {
     h += `<div>${esc(r.text)}</div>`;
-    if (r.case) h += `<div class="route">${r.case.sent ? `✉️ Письмо отправлено: ${esc(r.case.to)}, копия — вам (${esc(r.case.cc)})` : `Письмо не отправлено: ${esc(r.case.error||"")}`}</div>`;
+    if (r.case) h += `<div class="route">${r.case.sent ? `✉️ Письмо отправлено в службу качества (${esc(r.case.to)}), копия — вам` : `Письмо не отправлено: ${esc(r.case.error||"")}`}</div>`;
   } else if (r.outcome === "external_ref") {
     h += `<div class="route">${esc(r.text)}</div>`;
   } else {
@@ -175,6 +188,9 @@ function render(r){
 }
 
 function bindChips(){
+  document.querySelectorAll("[data-escalate]").forEach(b => b.onclick = async () => { b.disabled = true;
+    const r = await fetch("/api/escalate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({session})}).then(r=>r.json());
+    b.outerHTML = r.case && r.case.sent ? `<span class="route">✉️ Письмо отправлено в службу качества (${esc(r.case.to)}), копия — вам</span>` : `<span class="route">Не удалось отправить письмо</span>`; });
   document.querySelectorAll("[data-choice]").forEach(b => b.onclick = () => { add(`<div class="b">${esc(b.textContent)}</div>`, "user"); ask("", b.dataset.choice); });
   document.querySelectorAll("[data-multi]").forEach(b => b.onclick = () => b.closest(".b").querySelector(".multiPick").classList.remove("hide"));
   document.querySelectorAll("[data-multi-go]").forEach(b => b.onclick = () => {
@@ -185,18 +201,32 @@ function bindChips(){
 async function loadDocs(){
   const d = await fetch("/api/documents").then(r => r.json());
   $("#docTable tbody").innerHTML = d.map(x => `<tr><td>${esc(x.display_title)}</td><td>${esc(x.department_name)}</td><td>${STAGE[x.stage]||x.stage}</td><td>${x.windows}</td><td>действует</td></tr>`).join("");
+}
+const DEP = {TECH:"Тех дирекция", IB:"Дирекция ИБ", DBRCT:"ДБРЦТ"};
+async function loadKnow(){
   const p = await fetch("/api/practices").then(r => r.json());
-  $("#prTable tbody").innerHTML = p.length ? p.map(x => `<tr><td>${esc(x.question)}</td><td>${esc(x.answer)}<div class="meta">${esc(x.expert)} · ${new Date(x.created*1000).toLocaleString("ru")}</div></td><td>${x.applies_to.join(", ")}</td><td>${x.status === "published" ? `<button class="btn ghost" data-revoke="${x.practice_id}">Отозвать</button>` : "отозвана"}</td></tr>`).join("") : `<tr><td colspan="4" class="meta">Пока нет</td></tr>`;
-  document.querySelectorAll("[data-revoke]").forEach(b => b.onclick = async () => { await fetch("/api/qa/revoke",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({practice_id:b.dataset.revoke})}); loadDocs(); });
+  const ST = {draft:"ждёт подтверждения", published:"в базе знаний", revoked:"отозвана"};
+  $("#drafts").innerHTML = p.length ? p.slice().reverse().map(x => `<div class="mail"><div class="h"><span class="tag">${ST[x.status]||x.status}</span> · от ${esc(x.expert)} · ${new Date(x.created*1000).toLocaleString("ru")}</div>
+    ${x.status === "draft" ? `<p class="meta">Вопрос (общий вид и формулировки)</p><textarea data-q="${x.practice_id}">${esc(x.question)}</textarea>
+      <p class="meta">Ответ службы качества</p><textarea data-a="${x.practice_id}">${esc(x.answer)}</textarea>
+      <p class="meta">Для кого: ${["TECH","IB","DBRCT"].map(d => `<label class="tag"><input type="checkbox" data-d="${x.practice_id}" value="${d}" ${x.applies_to.includes(d)?"checked":""}> ${DEP[d]}</label>`).join(" ")}</p>
+      <button class="btn" data-approve="${x.practice_id}">Подтвердить и добавить в базу</button>`
+    : `<pre>${esc(x.question)}</pre><div class="route">${esc(x.answer)}</div><p class="meta">Для кого: ${x.applies_to.map(d => DEP[d]||d).join(", ")}</p>
+      ${x.status === "published" ? `<button class="btn ghost" data-revoke="${x.practice_id}">Отозвать</button>` : ""}`}</div>`).join("") : `<p class="meta">Карточек пока нет.</p>`;
+  document.querySelectorAll("[data-approve]").forEach(b => b.onclick = async () => { const id = b.dataset.approve;
+    const body = {practice_id:id, question:document.querySelector(`[data-q="${id}"]`).value, answer:document.querySelector(`[data-a="${id}"]`).value,
+      applies_to:[...document.querySelectorAll(`[data-d="${id}"]:checked`)].map(i => i.value)};
+    await fetch("/api/qa/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); loadKnow(); });
+  document.querySelectorAll("[data-revoke]").forEach(b => b.onclick = async () => { await fetch("/api/qa/revoke",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({practice_id:b.dataset.revoke})}); loadKnow(); });
 }
 
 async function loadCases(){
   const c = await fetch("/api/cases").then(r => r.json());
-  $("#qaCount").textContent = c.filter(x => x.status === "sent").length;
-  const ST = {sent:"новое", in_work:"в работе", answered:"ответ получен", published:"ответ в базе знаний"};
+  $("#qaCount").textContent = c.filter(x => x.status === "sent" || x.status === "in_work").length;
+  const ST = {sent:"новое", in_work:"в работе", answered:"карточка ждёт подтверждения", published:"ответ в базе знаний"};
   $("#cases").innerHTML = c.length ? c.map(x => `<div class="mail"><div class="h">От: assistant@assistant.local · Тема: Вопрос по регламентам · <span class="tag">${ST[x.status]||x.status}</span></div>
     <pre>${esc(x.question)}\n\nПодразделение: ${esc(JSON.parse(x.departments).join(", ") || "не определено")}\nПочему бот не ответил: ${esc(x.reason)}</pre>
-    ${x.status === "published" ? "" : `<textarea placeholder="Ответ службы качества…" data-case="${x.case_id}"></textarea>
+    ${["published","answered"].includes(x.status) ? "" : `<textarea placeholder="Ответ службы качества…" data-case="${x.case_id}"></textarea>
     <div style="display:flex;gap:8px;margin-top:6px"><button class="btn" data-send="${x.case_id}">Ответить</button></div>`}</div>`).join("") : `<p class="meta">Обращений пока нет.</p>`;
   document.querySelectorAll("[data-send]").forEach(b => b.onclick = async () => {
     const t = document.querySelector(`textarea[data-case="${b.dataset.send}"]`).value.trim(); if (!t) return;

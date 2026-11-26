@@ -56,13 +56,23 @@ class Store:
     def seen_mail(self, mail_id):
         return self.db.execute("select 1 from mails where mail_id=?", (mail_id,)).fetchone() is not None
 
-    def publish(self, cid, expert, question, answer, applies_to, clauses, outcome):
+    def publish(self, cid, expert, question, answer, applies_to, clauses, outcome, status="published"):
         pid = "P" + uuid.uuid4().hex[:8].upper()
         self.db.execute("insert into practices values(?,?,?,?,?,?,?,?,?,?,?,?)",
                         (pid, cid, time.time(), expert, question, answer, json.dumps(applies_to),
-                         json.dumps(clauses, ensure_ascii=False), outcome, "published", None, None))
+                         json.dumps(clauses, ensure_ascii=False), outcome, status, None, None))
         self.db.commit()
         return pid
+
+    def approve(self, pid, who, question=None, answer=None, applies_to=None):
+        row = self.db.execute("select * from practices where practice_id=?", (pid,)).fetchone()
+        if not row:
+            raise KeyError(pid)
+        self.db.execute("update practices set status='published', question=?, answer=?, applies_to=?, revoked_by=? where practice_id=?",
+                        (question or row["question"], answer or row["answer"],
+                         json.dumps(applies_to) if applies_to else row["applies_to"], f"подтвердил: {who}", pid))
+        self.db.execute("update cases set status='published', updated=? where case_id=?", (time.time(), row["case_id"]))
+        self.db.commit()
 
     def revoke(self, pid, who):
         self.db.execute("update practices set status='revoked', revoked_by=?, revoked_at=? where practice_id=?",

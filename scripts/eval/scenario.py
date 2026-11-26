@@ -35,6 +35,8 @@ def step(name, resp):
 
 Q1 = "Техническая дирекция: можно ли начать работы по гарантийному письму заказчика до подписания договора?"
 r = step("1. кейс 1: вопрос без прямого ответа в регламенте", call("/api/ask", {"session": "s1", "question": Q1, "employee": "ivanov@example.test"}))
+if r.get("outcome") != "escalate":
+    step("1a. сотрудник: «Уточнить у службы качества»", call("/api/escalate", {"session": "s1"}))
 cases = call("/api/cases")
 cid = cases[0]["case_id"] if cases else None
 print("   обращение:", cid, cases[0]["status"] if cases else "")
@@ -42,8 +44,11 @@ if cid:
     step("2. эксперт: промежуточный ответ", call("/api/qa/reply", {"case_id": cid, "text": "Добрый день! Уточняю у коллег из Технической дирекции, вернусь с ответом."}))
     step("3. бот разбирает почту", call("/api/qa/poll", {}))
     step("4. эксперт: итоговый ответ", call("/api/qa/reply", {"case_id": cid, "text": "Да. Подписанное гарантийное письмо заказчика — основание для старта работ до подписания договора во всех дирекциях, включая Техническую. Старт согласует директор дирекции."}))
-    step("5. бот разбирает почту", call("/api/qa/poll", {}))
-    step("6. практика в базе", call("/api/practices"))
+    step("5. бот разбирает почту → карточка знания", call("/api/qa/poll", {}))
+    pr = step("6. карточка (черновик)", call("/api/practices"))
+    draft = next((x for x in pr if x["status"] == "draft"), None) if isinstance(pr, list) else None
+    if draft:
+        step("6a. эксперт подтверждает карточку", call("/api/qa/approve", {"practice_id": draft["practice_id"], "who": "эксперт службы качества"}))
     step("7. кейс 3: повторный вопрос другими словами", call("/api/ask", {"session": "s2", "question": "В Техдирекции клиент прислал гарантийное письмо, договор ещё не подписан. Можно стартовать?", "employee": "petrov@example.test"}))
 r8 = step("8. кейс 2: вопрос без подразделения", call("/api/ask", {"session": "s3", "question": "За сколько заранее запускать заявку на расчёт?"}))
 opt = next((o["id"] for o in r8.get("options", []) if "ДБРЦТ" in o["label"]), None)

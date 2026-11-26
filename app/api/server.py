@@ -32,10 +32,15 @@ class MockLLM:
         props = schema.get("properties", {})
         if "in_scope" in props:
             return {"in_scope": True}, {}
+        if "queries" in props:
+            return {"queries": [user.rsplit("Вопрос сотрудника:", 1)[-1].strip()], "departments": [], "stage": ""}, {}
         if "is_final" in props:
-            final = "уточн" not in user.lower().split("письмо эксперта")[-1]
+            mail_part = user.lower().split("письмо эксперта")[-1]
+            final = "уточн" not in mail_part
             ans = user.split("\n", 3)[-1].strip()[:500]
-            return {"is_final": final, "answer": ans, "applies_to": ["ALL"] if "всех" in user.lower() else [], "outcome": "practice"}, {}
+            q = user.split("\n", 1)[0].replace("Вопрос сотрудника:", "").strip()
+            return {"is_final": final, "answer": ans, "question_general": q, "variants": [q],
+                    "applies_to": ["ALL"] if "всех" in mail_part else [], "outcome": "practice"}, {}
         import re
         m = re.search(r"\[w1\][^\n]*\n(.+?)(?:\n\n\[w2\]|\n\nПодразделение:)", user, re.S)
         txt = (m.group(1) if m else "").strip()
@@ -128,15 +133,9 @@ class App:
             s["pending"], s["pending_options"] = q, turn.options
         else:
             s["pending"] = None
+        s["last"] = {"q": q, "hits": turn.hits[:5], "employee": employee}
         if turn.outcome == "escalate":
-            frags = [{"doc": h.get("path", "").split(" › ")[0], "clause": h["clause"], "text": h["text"]} for h in turn.hits[:5]]
-            deps = sorted({label(d, self.registry) for d in self.registry if d["doc_id"] in (s["docs"] or [])})
-            case = self.store.new_case(employee, q, deps, s["history"][-6:], frags, "в регламентах нет опоры для ответа")
-            try:
-                mail.send(mail.case_email(case, self.qa_address), *self.smtp)
-                out["case"] = {"id": case["case_id"], "to": self.qa_address, "cc": employee, "sent": True}
-            except OSError as e:
-                out["case"] = {"id": case["case_id"], "sent": False, "error": str(e)[:120]}
+            out["case"] = self.escalate(sid, "в регламентах нет опоры для ответа")
         out["seconds"] = round(time.time() - t0, 2)
         s["history"].append({"role": "user", "text": q})
         s["history"].append({"role": "assistant", "text": turn.outcome})
@@ -144,6 +143,18 @@ class App:
             fh.write(json.dumps({"t": time.time(), "sid": sid, "q": q, "outcome": turn.outcome, "trace": turn.trace,
                                  "seconds": out["seconds"]}, ensure_ascii=False) + "\n")
         return out
+
+    def escalate(self, sid, reason):
+        s = self.sessions.get(sid) or {}
+        last = s.get("last") or {}
+        frags = [{"doc": h.get("path", "").split(" › ")[0], "clause": h["clause"], "text": h["text"]} for h in last.get("hits", [])]
+        deps = sorted({label(d, self.registry) for d in self.registry if d["doc_id"] in (s.get("docs") or [])})
+        case = self.store.new_case(last.get("employee", ""), last.get("q", ""), deps, s.get("history", [])[-6:], frags, reason)
+        try:
+            mail.send(mail.case_email(case, self.qa_address), *self.smtp)
+            return {"id": case["case_id"], "to": self.qa_address, "cc": last.get("employee", ""), "sent": True}
+        except OSError as e:
+            return {"id": case["case_id"], "sent": False, "error": str(e)[:120]}
 
     def poll_mail(self):
         ev = process_replies(self.store, self.mailpit, self.llm)
@@ -210,6 +221,8 @@ def make_handler(app):
                     out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""))
                     out["session"] = sid
                     return self._json(200, out)
+                if self.path == "/api/escalate":          # «Уточнить у службы качества» под ответом с оговоркой
+                    return self._json(200, {"case": app.escalate(b["session"], b.get("reason") or "сотрудник просит уточнить ответ с оговоркой")})
                 if self.path == "/api/reset":
                     app.sessions.pop(b.get("session"), None)
                     return self._json(200, {"ok": True})
@@ -219,6 +232,10 @@ def make_handler(app):
                     return self._json(200, {"ok": True})
                 if self.path == "/api/qa/poll":
                     return self._json(200, {"events": app.poll_mail()})
+                if self.path == "/api/qa/approve":        # эксперт подтверждает/правит карточку знания
+                    app.store.approve(b["practice_id"], b.get("who", "служба качества"), b.get("question"), b.get("answer"), b.get("applies_to"))
+                    app.rebuild()
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/qa/revoke":
                     app.store.revoke(b["practice_id"], b.get("who", "qa"))
                     app.rebuild()

@@ -48,8 +48,12 @@ class EscalationTest(unittest.TestCase):
         mb = FakeMailbox([{"id": "m2", "case_msgid": self.c["message_id"], "sender": "qa@example.test",
                            "text": "Гарантийное письмо — основание для старта во всех дирекциях."}])
         ev = process_replies(self.s, mb, FakeLLM({"is_final": True, "answer": "Можно по гарантийному письму во всех дирекциях.",
+                                                   "question_general": "Можно ли стартовать по гарантийному письму?",
+                                                   "variants": ["Старт до договора по гарантийке?"],
                                                    "applies_to": ["ALL"], "outcome": "practice"}))
-        self.assertEqual(ev[0]["event"], "published")
+        self.assertEqual(ev[0]["event"], "draft")
+        self.assertEqual(practice_windows(self.s), [])          # без подтверждения в поиск не попадает
+        self.s.approve(ev[0]["practice_id"], "эксперт")
         ws = practice_windows(self.s)
         self.assertEqual({w["department"] for w in ws}, {"TECH", "IB", "DBRCT"})
         # повторная обработка того же письма ничего не делает
