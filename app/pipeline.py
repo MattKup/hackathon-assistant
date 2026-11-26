@@ -184,10 +184,12 @@ VERDICT_RANK = {"answer": 3, "conflict": 2, "answer_with_caveat": 2, "no_answer"
 
 
 def build_index(windows):
-    """(подразделение, пункт) → окно — для агентного прохода: пункт по ссылке «п. X.Y» и соседние пункты."""
+    """(документ, пункт) → окно — для агентного прохода: пункт по ссылке «п. X.Y» и соседние пункты.
+    Ключ — документ, а не подразделение: у ИБ два документа (пресейл и проект) с 75 совпадающими номерами пунктов
+    (ревью «перенос из сборки» Н1) — соседний пункт брался бы из чужого документа."""
     idx = {}
     for w in windows:
-        idx.setdefault((w.get("department"), w.get("clause")), w)
+        idx.setdefault((w.get("doc_id"), w.get("clause")), w)
     return idx
 
 
@@ -219,15 +221,16 @@ def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index,
     текст, соседние пункты и пункты по недостающему, ответить второй раз и оставить лучший ответ."""
     have = {w["window_id"] for w in ws}
     extra = []
-    cited = [st.get("clause") for st in res.get("steps", [])] or [w["clause"] for w in ws[:3]]
+    doc_of = {w["window_id"]: w.get("doc_id") for w in ws}
+    cited = [(doc_of.get(st.get("window_id")), st.get("clause")) for st in res.get("steps", [])] or [(w.get("doc_id"), w["clause"]) for w in ws[:3]]
     for w in ws[:8]:
         for c in REF_RE.findall(w.get("text", "")):
-            x = index.get((dep, c)) if index else None
+            x = index.get((w.get("doc_id"), c)) if index else None
             if x and x["window_id"] not in have:
                 extra.append({**x, "score": w.get("score", 0) * 0.9, "via": f"ссылка из п. {w['clause']}"})
-    for c in cited:
+    for d, c in cited:
         for n in _neighbors(c or ""):
-            x = index.get((dep, n)) if index else None
+            x = index.get((d, n)) if index else None
             if x and x["window_id"] not in have:
                 extra.append({**x, "score": 0.5, "via": f"соседний к п. {c}"})
     miss = (res.get("missing") or "").strip()

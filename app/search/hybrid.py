@@ -55,9 +55,13 @@ class Hybrid:
         rank = {}
         for r, h in enumerate(bm):
             rank[h["window_id"]] = rank.get(h["window_id"], 0) + 1 / (self.rrf_k + r + 1)
-        if qvec is not None or self.embed_fn:
+        try:
+            order_d = self.dense_order(query, qvec) if (qvec is not None or self.embed_fn) else None
+        except Exception as e:                  # эмбеддинги недоступны — ищем по BM25 (сборка до хакатона: «поиск без встройки» ✅)
+            order_d, trace["dense_error"] = None, str(e)[:120]
+        if order_d is not None:
             dense = []
-            for i in self.dense_order(query, qvec):
+            for i in order_d:
                 if allowed is None or self.windows[i]["doc_id"] in allowed:
                     dense.append(i)
                     if len(dense) >= pool:
@@ -69,7 +73,10 @@ class Hybrid:
         fused = sorted(rank.items(), key=lambda x: -x[1])[:rerank_n]
         cands = [self.windows[self.pos[w]] for w, _ in fused]
         if rerank_scores is None and self.rerank_fn and cands:
-            rerank_scores = self.rerank_fn(query, [c["path"] + "\n" + c["text"] for c in cands])
+            try:
+                rerank_scores = self.rerank_fn(query, [c["path"] + "\n" + c["text"] for c in cands])
+            except Exception as e:              # реранкер недоступен — порядок по RRF
+                rerank_scores, trace["rerank_error"] = None, str(e)[:120]
         if rerank_scores is not None:
             order = sorted(range(len(cands)), key=lambda i: -rerank_scores[i])
             out = [{**cands[i], "score": round(float(rerank_scores[i]), 4)} for i in order[:k]]
