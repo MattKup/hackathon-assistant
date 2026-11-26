@@ -30,8 +30,12 @@ def run(corpus, out):
         sha = hashlib.sha256(f.read_bytes()).hexdigest()
         paras = parse(f)
         dep, stage = meta_for(f.name, cfg)
+        side = f.with_name(f.name + ".meta.json")      # описание документа рядом с файлом (как поля формы загрузки СК)
+        meta = json.loads(side.read_text()) if side.exists() else {}
+        dep, stage = meta.get("department", dep), meta.get("stage", stage)
         doc = {"doc_id": sha, "file_name": f.name, "title": paras[0].text if paras else f.stem,
-               "display_title": f.stem, "department": dep, "department_name": cfg["departments"].get(dep, dep),
+               "display_title": meta.get("title", f.stem), "department": dep,
+               "department_name": meta.get("department_name") or cfg["departments"].get(dep, dep),
                "stage": stage, "status": "active", "status_reason": "все 4 документа действующие (СК, брифинг 26.11)",
                "parser": "docx_simple", "paragraphs": len(paras), "chars": sum(len(p.text) for p in paras)}
         ws = build(doc, paras)
