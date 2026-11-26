@@ -36,7 +36,7 @@ EXPECT = {"answer": {"answer", "answer_with_caveat"}, "clarify": {"clarify"},
           "answer_per_department": {"answer", "answer_with_caveat", "conflict"}, "compare_all": {"clarify"},
           "answer_with_caveat": {"answer_with_caveat", "conflict"}, "external_ref": {"external_ref", "answer_with_caveat"},
           "escalate": {"escalate"}, "out_of_scope": {"out_of_scope"}, "task_refusal": {"task_refusal"},
-          "document": {"document"}}
+          "document": {"document"}, "ask_topic": {"ask", "clarify"}}   # размытый вопрос → уточнение темы
 
 
 ANSWERED = {"answer", "answer_with_caveat", "conflict"}
@@ -147,7 +147,7 @@ def main(corpus_rel, eval_rel, *rest):
                 sess["ask_reply"] = t1.options[0]["label"]
                 t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
                 row["turn2_choice"], row["turn2"] = t1.options[0]["label"], turn_dict(t2)
-                ok = exp in ("clarify", "compare_all") or t2.outcome in EXPECT.get(exp, {exp})
+                ok = exp in ("clarify", "compare_all", "ask_topic") or t2.outcome in EXPECT.get(exp, {exp})
                 tok2 = t2.tokens
                 t1.tokens = add_tokens(t1.tokens, tok2)
             row["outcome_ok"] = ok
