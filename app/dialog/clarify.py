@@ -51,10 +51,15 @@ def mentioned(question, registry):
 
 
 def label(doc, registry):
+    """Короткая подпись документа: подразделение (+ стадия, если у подразделения несколько документов)."""
     same = [d for d in registry if d["department"] == doc["department"]]
-    name = doc["department_name"]
+    name = doc.get("department_name") or doc["department"]
     if len(same) > 1:
-        name += " — " + {"presale": "пресейл", "project": "проект"}.get(doc["stage"], doc["stage"])
+        stages = [d["stage"] for d in same]
+        if doc["stage"] in ("presale", "project") and stages.count(doc["stage"]) == 1:
+            name += " — " + {"presale": "пресейл", "project": "проект"}[doc["stage"]]
+        else:
+            name += " — " + doc.get("display_title", "")[:60]
     return name
 
 

@@ -83,6 +83,8 @@ th{color:var(--muted);font-weight:600;background:var(--soft)}
     <button data-tab="docs">Регламенты</button>
     <button data-tab="qa" class="qaonly hide">Обращения <span class="tag" id="qaCount">0</span></button>
     <button data-tab="know" class="qaonly hide">Знания</button>
+    <button data-tab="stats" class="qaonly hide">Аналитика</button>
+    <button data-tab="about">О системе</button>
   </nav>
 </header>
 
@@ -95,13 +97,24 @@ th{color:var(--muted);font-weight:600;background:var(--soft)}
     </div></div></div>
 </main>
 
-<main id="docs" class="hide"><table id="docTable"><thead><tr><th>Регламент</th><th>Подразделение</th><th>Стадия</th><th>Пунктов</th><th>Статус</th></tr></thead><tbody></tbody></table>
+<main id="docs" class="hide">
+  <div class="mail qaonly hide" id="uploadBox"><b>Загрузить регламент</b>
+    <p class="meta">DOCX разбирается сразу; PDF, сканы и фото — через doc-intel (распознавание на этом сервере). После разбора документ делится на пункты и сразу участвует в ответах.</p>
+    <form id="upForm" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <input type="file" name="file" accept=".docx,.pdf,.png,.jpg,.jpeg,.tif,.tiff" required>
+      <select name="department" class="role"><option value="TECH">Тех дирекция</option><option value="IB">Дирекция ИБ</option><option value="DBRCT">ДБРЦТ</option></select>
+      <select name="stage" class="role"><option value="full_cycle">пресейл и проект</option><option value="presale">пресейл</option><option value="project">проект</option></select>
+      <button class="btn">Загрузить</button><span class="meta" id="upMsg"></span>
+    </form></div>
+  <table id="docTable"><thead><tr><th>Регламент</th><th>Подразделение</th><th>Стадия</th><th>Пунктов</th><th>Источник</th><th>Статус</th><th class="qaonly hide"></th></tr></thead><tbody></tbody></table>
 </main>
 
 <main id="qa" class="hide">
   <p class="meta">Почтовый ящик службы качества (имитация: локальный почтовый сервер, наружу письма не уходят). Бот пишет сюда вопросы, на которые нет ответа в регламентах, сотрудник в копии. Ответьте на письмо — бот подготовит карточку знания, вы её подтвердите во вкладке «Знания».</p>
   <div id="cases"></div>
 </main>
+<main id="stats" class="hide"><div id="statsBox"></div></main>
+<main id="about" class="hide"><div id="aboutBox"></div></main>
 <main id="know" class="hide">
   <p class="meta">Карточки знаний — ответы службы качества. В поиск попадают только подтверждённые; отозванная карточка сразу перестаёт использоваться.</p>
   <div id="drafts"></div>
@@ -121,13 +134,15 @@ const esc = s => (s||"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&
 
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  ["chat","docs","qa","know"].forEach(t => $("#"+t).classList.toggle("hide", t !== b.dataset.tab));
+  ["chat","docs","qa","know","stats","about"].forEach(t => $("#"+t).classList.toggle("hide", t !== b.dataset.tab));
   $("#askForm").classList.toggle("hide", b.dataset.tab !== "chat");
   if (b.dataset.tab === "docs") loadDocs();
   if (b.dataset.tab === "qa") loadCases();
   if (b.dataset.tab === "know") loadKnow();
+  if (b.dataset.tab === "stats") loadStats();
+  if (b.dataset.tab === "about") loadAbout();
 });
-$("#role").onchange = () => { document.querySelectorAll(".qaonly").forEach(x => x.classList.toggle("hide", $("#role").value !== "qa"));
+$("#role").onchange = () => { if (!$("#docs").classList.contains("hide")) setTimeout(loadDocs, 0); document.querySelectorAll(".qaonly").forEach(x => x.classList.toggle("hide", $("#role").value !== "qa"));
   if ($("#role").value !== "qa") document.querySelector('nav button[data-tab="chat"]').click(); };
 document.querySelectorAll(".empty .ex button").forEach(b => b.onclick = () => ask(b.textContent));
 $("#askForm").onsubmit = e => { e.preventDefault(); const v = $("#q").value.trim(); if (v) { $("#q").value = ""; ask(v); } };
@@ -172,7 +187,7 @@ function render(r){
     if (r.outcome === "conflict") h += `<div class="caveat">В регламентах противоречие.</div>`;
     if (r.outcome === "answer_with_caveat" || r.outcome === "conflict") h += `<div class="chips"><button data-escalate="1">Уточнить у службы качества</button></div>`;
     if (r.external_refs && r.external_refs.length) h += `<div class="route">Подробный порядок — в отдельном документе, которого нет в базе: ${r.external_refs.map(esc).join("; ")}</div>`;
-    if (notes.length) h += `<div class="notes">` + notes.map(s => `<div><b>${s.n}</b> ${esc(s.doc_title)}, п. ${esc(s.clause)}<q>${esc(s.quote)}</q></div>`).join("") + `</div>`;
+    if (notes.length) h += `<div class="notes">` + notes.map(s => `<div><b>${s.n}</b> ${s.practice ? "Практика службы качества (подтверждена экспертом)" : `${esc(s.doc_title)}, п. ${esc(s.clause)}`}<q>${esc(s.quote)}</q></div>`).join("") + `</div>`;
   } else if (r.outcome === "document") {
     h += `<div>${esc(r.text)}</div><ul>` + r.documents.map(d => `<li><b>${esc(d.title)}</b> <span class="meta">(${esc(d.label)})</span><br><span class="meta">${d.sections.slice(0,3).map(esc).join("; ")}</span></li>`).join("") + `</ul>`;
   } else if (r.outcome === "escalate") {
@@ -200,9 +215,38 @@ function bindChips(){
 
 async function loadDocs(){
   const d = await fetch("/api/documents").then(r => r.json());
-  $("#docTable tbody").innerHTML = d.map(x => `<tr><td>${esc(x.display_title)}</td><td>${esc(x.department_name)}</td><td>${STAGE[x.stage]||x.stage}</td><td>${x.windows}</td><td>действует</td></tr>`).join("");
+  const qa = $("#role").value === "qa";
+  $("#docTable tbody").innerHTML = d.map(x => `<tr><td>${esc(x.display_title)}${x.pages ? `<div class="meta">${x.pages} стр.${x.ocr_pages ? `, распознано OCR: ${x.ocr_pages}` : ""} · ${esc(x.parser||"")}</div>` : ""}</td>
+    <td>${esc(x.department_name || DEP[x.department] || "")}</td><td>${STAGE[x.stage]||x.stage||""}</td><td>${x.windows ?? "—"}</td><td>${esc(x.source)}</td><td>${esc(x.status)}</td>
+    <td class="${qa ? "" : "hide"}">${x.source === "загружен" ? `<button class="btn ghost" data-rm="${x.doc_id}">Убрать</button>` : ""}</td></tr>`).join("");
+  document.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => { await fetch("/api/docs/remove",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({doc_id:b.dataset.rm})}); loadDocs(); });
+  if (d.some(x => x.status === "распознаётся…")) setTimeout(() => { if (!$("#docs").classList.contains("hide")) loadDocs(); }, 3000);
 }
 const DEP = {TECH:"Тех дирекция", IB:"Дирекция ИБ", DBRCT:"ДБРЦТ"};
+$("#upForm").onsubmit = async e => { e.preventDefault(); $("#upMsg").textContent = "Загружаю…";
+  const r = await fetch("/api/docs/upload", {method:"POST", body:new FormData(e.target)}).then(r => r.json()).catch(e => ({error:String(e)}));
+  $("#upMsg").textContent = r.error ? "Ошибка: " + r.error : (r.new ? "Принят, распознаётся" : "Этот файл уже загружен"); e.target.reset(); loadDocs(); };
+const OUT = {answer:"ответ", answer_with_caveat:"ответ с оговоркой", conflict:"противоречие", clarify:"уточнение", escalate:"письмо в службу качества",
+  out_of_scope:"вне регламентов", task_refusal:"просьба «сделай»", document:"где регламент", external_ref:"внешний документ"};
+async function loadStats(){
+  const a = await fetch("/api/analytics").then(r => r.json());
+  $("#statsBox").innerHTML = `<div class="chips"><span class="tag">Вопросов: ${a.questions}</span><span class="tag">Обращений в службу качества: ${a.cases}</span>
+    <span class="tag">Карточек знаний в базе: ${a.practices}</span><span class="tag">Время ответа: p50 ${a.p50 ?? "—"} с · p95 ${a.p95 ?? "—"} с</span></div>
+    <h3>Исходы</h3><table><tbody>${Object.entries(a.by_outcome).map(([k,v]) => `<tr><td>${OUT[k]||k}</td><td>${v}</td></tr>`).join("") || `<tr><td class="meta">Пока нет вопросов</td></tr>`}</tbody></table>
+    <h3>Чего нет в регламентах (чаще всего)</h3><table><tbody>${a.no_answer_top.map(([q,n]) => `<tr><td>${esc(q)}</td><td>${n}</td></tr>`).join("") || `<tr><td class="meta">Пусто</td></tr>`}</tbody></table>
+    <h3>Последние вопросы</h3><table><tbody>${a.recent.map(r => `<tr><td>${esc(r.q)}</td><td>${OUT[r.outcome]||r.outcome}</td><td>${r.seconds} с</td></tr>`).join("")}</tbody></table>`;
+}
+async function loadAbout(){
+  const q = await fetch("/api/quality").then(r => r.json());
+  const run = (q.sprint_runs||[])[0] || {};
+  $("#aboutBox").innerHTML = `<h3>Как устроено</h3><ul>${(q.stack||[]).map(s => `<li>${esc(s)}</li>`).join("")}</ul>
+    <h3>Качество — прогоны спринта</h3><p class="meta">${esc(run.set||"")}</p>
+    <div class="chips"><span class="tag">${esc(run.name||"")}, ${esc(run.date||"")}: верный исход ${esc(run.outcome_ok||"")}</span><span class="tag">${esc(run.time||"")}</span></div>
+    <table><tbody>${Object.entries(run.by_class||{}).map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table>
+    <p class="meta">${esc(run.note||"")}</p>
+    <p class="meta">История: ${(q.sprint_runs||[]).slice(1).map(r => `${esc(r.name)} — ${esc(r.outcome_ok)}`).join(" · ")}</p>
+    <h3>${esc(q.reference?.title||"")}</h3><ul>${(q.reference?.items||[]).map(s => `<li>${esc(s)}</li>`).join("")}</ul><p class="meta">${esc(q.reference?.note||"")}</p>`;
+}
 async function loadKnow(){
   const p = await fetch("/api/practices").then(r => r.json());
   const ST = {draft:"ждёт подтверждения", published:"в базе знаний", revoked:"отозвана"};

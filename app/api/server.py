@@ -18,6 +18,7 @@ from app.dialog.clarify import label
 from app.escalation import mail
 from app.escalation.process import practice_windows, process_replies
 from app.escalation.store import Store
+from app.ingest.upload import Uploads, parse_multipart
 from app.pipeline import run_turn
 from app.registry.build import run as build_registry
 from app.search.bm25 import BM25
@@ -58,6 +59,12 @@ class App:
         self.registry, wins = build_registry(Path(corpus), data / "index")
         self.windows = [w.to_dict() for w in wins]
         self.store = Store(str(data / "app.sqlite"))
+        self.lock = threading.Lock()
+        self.uploads = Uploads(str(data / "uploads.sqlite"), data / "uploads", os.environ.get("DOC_INTEL_URL", ""),
+                               os.environ.get("DOC_INTEL_TOKEN_FILE", ""))
+        for doc, ws in self.uploads.load_ready():
+            self.registry.append(doc)
+            self.windows += ws
         self.sessions = {}
         self.mock = mock
         self.qa_address = os.environ.get("QA_EMAIL", "quality@example.test")   # в демо — не реальный адрес СК
@@ -73,7 +80,8 @@ class App:
             from app.search.tei import TEI
             self.tei = TEI(os.environ["TEI_EMBED_URL"], os.environ["TEI_RERANK_URL"])
             self.llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
-            self.base_vecs = self.tei.embed([w["path"] + "\n" + w["text"] for w in self.windows])
+            self.vec = dict(zip([w["window_id"] for w in self.windows],
+                                self.tei.embed([w["path"] + "\n" + w["text"] for w in self.windows])))
             self.Hybrid = Hybrid
             self._rebuild_real()
 
@@ -85,12 +93,53 @@ class App:
         self.bm = BM25(self.all_windows())
 
     def _rebuild_real(self):
-        pw = practice_windows(self.store)
-        pv = self.tei.embed([w["path"] + "\n" + w["text"] for w in pw]) if pw else []
-        self.hy = self.Hybrid(self.windows + pw, self.base_vecs + pv, self.tei.embed, self.tei.rerank)
+        allw = self.all_windows()
+        missing = [w for w in allw if w["window_id"] not in self.vec]
+        if missing:
+            self.vec.update(zip([w["window_id"] for w in missing], self.tei.embed([w["path"] + "\n" + w["text"] for w in missing])))
+        self.hy = self.Hybrid(allw, [self.vec[w["window_id"]] for w in allw], self.tei.embed, self.tei.rerank)
 
     def rebuild(self):
-        self._rebuild_mock() if self.mock else self._rebuild_real()
+        with self.lock:
+            self._rebuild_mock() if self.mock else self._rebuild_real()
+
+    # --- загрузка документов (служба качества) ---
+    def upload(self, file_name, data, department, stage):
+        doc_id, new = self.uploads.accept(file_name, data, department, stage)
+        if new:
+            threading.Thread(target=self._process_upload, args=(doc_id,), daemon=True).start()
+        return doc_id, new
+
+    def _process_upload(self, doc_id):
+        try:
+            doc, ws = self.uploads.process(doc_id)
+        except Exception:
+            return
+        with self.lock:
+            self.registry = [d for d in self.registry if d["doc_id"] != doc_id] + [doc]
+            self.windows = [w for w in self.windows if w["doc_id"] != doc_id] + ws
+        self.rebuild()
+
+    def remove_upload(self, doc_id):
+        with self.lock:
+            self.registry = [d for d in self.registry if d["doc_id"] != doc_id]
+            self.windows = [w for w in self.windows if w["doc_id"] != doc_id]
+        self.uploads.remove(doc_id)
+        self.rebuild()
+
+    def analytics(self):
+        rows = []
+        if self.log.exists():
+            rows = [json.loads(l) for l in self.log.read_text().splitlines() if l.strip()]
+        from collections import Counter
+        out = Counter(r["outcome"] for r in rows)
+        times = sorted(r.get("seconds", 0) for r in rows if r["outcome"] != "clarify")
+        noans = Counter(r["q"] for r in rows if r["outcome"] in ("escalate", "answer_with_caveat") and r["q"])
+        return {"questions": len(rows), "by_outcome": dict(out),
+                "p50": times[len(times) // 2] if times else None, "p95": times[max(0, int(len(times) * .95) - 1)] if times else None,
+                "no_answer_top": noans.most_common(10), "cases": len(self.store.cases()),
+                "practices": sum(1 for p in self.store.practices(only_published=False) if p["status"] == "published"),
+                "recent": rows[-15:][::-1]}
 
     def search(self, q, allowed):
         """Практика ищется вместе с документом подразделения: allowed расширяется practice:<dep>."""
@@ -202,7 +251,21 @@ def make_handler(app):
             if self.path == "/api/health":
                 return self._json(200, {"ok": True, "mock": app.mock, "windows": len(app.windows)})
             if self.path == "/api/documents":
-                return self._json(200, [{k: d[k] for k in ("display_title", "department_name", "stage", "windows", "status")} for d in app.registry])
+                ups = {r["doc_id"]: r for r in app.uploads.rows()}
+                docs = [{"doc_id": d["doc_id"], "display_title": d["display_title"], "department": d["department"],
+                         "department_name": label(d, app.registry), "stage": d["stage"], "windows": d.get("windows"),
+                         "status": "действует", "source": "загружен" if d.get("uploaded") else "корпус хакатона",
+                         "parser": d.get("parser"), "pages": (ups.get(d["doc_id"]) or {}).get("pages"),
+                         "ocr_pages": (ups.get(d["doc_id"]) or {}).get("ocr_pages")} for d in app.registry]
+                pending = [{"doc_id": r["doc_id"], "display_title": r["file_name"], "department": r["department"], "stage": r["stage"],
+                            "status": {"processing": "распознаётся…", "error": "ошибка: " + (r["error"] or "")}.get(r["status"], r["status"]),
+                            "source": "загружен", "parser": r["parser"]} for r in ups.values() if r["status"] != "ready"]
+                return self._json(200, pending + docs)
+            if self.path == "/api/analytics":
+                return self._json(200, app.analytics())
+            if self.path == "/api/quality":
+                f = UI / "quality.json"
+                return self._json(200, json.loads(f.read_text()) if f.exists() else {})
             if self.path == "/api/cases":
                 return self._json(200, app.store.cases())
             if self.path == "/api/practices":
@@ -210,6 +273,18 @@ def make_handler(app):
             return self._json(404, {"error": "not found"})
 
         def do_POST(self):
+            if self.path == "/api/docs/upload":
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    if n > 55 * 1024 * 1024:
+                        return self._json(413, {"error": "файл больше 50 МБ"})
+                    fields, files = parse_multipart(self.headers.get("Content-Type", ""), self.rfile.read(n))
+                    if "file" not in files:
+                        return self._json(400, {"error": "нет файла"})
+                    doc_id, new = app.upload(files["file"][0], files["file"][1], fields.get("department", "TECH"), fields.get("stage", "full_cycle"))
+                    return self._json(200, {"doc_id": doc_id, "new": new})
+                except ValueError as e:
+                    return self._json(400, {"error": str(e)})
             try:
                 b = self._body()
             except ValueError:
@@ -221,6 +296,9 @@ def make_handler(app):
                     out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""))
                     out["session"] = sid
                     return self._json(200, out)
+                if self.path == "/api/docs/remove":
+                    app.remove_upload(b["doc_id"])
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/escalate":          # «Уточнить у службы качества» под ответом с оговоркой
                     return self._json(200, {"case": app.escalate(b["session"], b.get("reason") or "сотрудник просит уточнить ответ с оговоркой")})
                 if self.path == "/api/reset":

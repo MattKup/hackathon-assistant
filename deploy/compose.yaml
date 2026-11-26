@@ -31,8 +31,10 @@ services:
       MAIL_SMTP_PORT: "19651"
       MAILPIT_API: http://127.0.0.1:19652
       QA_EMAIL: quality@example.test        # демо: НЕ реальный адрес службы качества
+      DOC_INTEL_TOKEN_FILE: /run/secrets/docintel_token
     volumes:
       - ..:/app:ro
       - ../../corpus:/corpus:ro
       - ../../data/app:/data
+      - /home/matt/gfreeze-r/secrets/docintel_api_token:/run/secrets/docintel_token:ro   # токен doc-intel, не в git
     depends_on: [mailpit]
