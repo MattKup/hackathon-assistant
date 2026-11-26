@@ -228,7 +228,7 @@ def check(raw, windows, question=""):
             out["steps"].append({**st, "window_id": w["window_id"], "clause": w["clause"],
                                  "department": w["department"], "doc_title": w["doc_title"],
                                  "source_text": w["text"], "section": w.get("section_title", ""),
-                                 "external_refs": w.get("external_refs", []), "label": ref_label(w)})
+                                 "external_refs": w.get("external_refs", []), "label": ref_label(w), "doc_id": w.get("doc_id")})
     # числа в кратком ответе и оговорке — только из процитированных пунктов (ревью Fable: q054, q082, q115, q118)
     cited = " ".join(st["source_text"] for st in out["steps"])
     if out["steps"]:

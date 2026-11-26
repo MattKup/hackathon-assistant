@@ -268,6 +268,10 @@ class App:
         deps = last.get("depts") or sorted({label(d, self.registry) for d in self.registry if d["doc_id"] in (s.get("docs") or [])})
         dup = next((c for c in self.store.cases() if c["question"] == last.get("q", "") and c["employee"] == last.get("employee", "")
                     and time.time() - c["created"] < 2 * 3600 and c["status"] in ("sent", "interim")), None)
+        if dup is None and reason.startswith("противоречие") and ":" in reason:
+            # по одной паре противоречия служба качества получает одно письмо, а не на каждый вопрос (ревью Fable)
+            dup = next((c for c in self.store.cases() if c["reason"] == reason and time.time() - c["created"] < 7 * 86400
+                        and c["status"] in ("sent", "interim")), None)
         if dup:                                   # тот же вопрос того же сотрудника — новое письмо не шлём (ревью Fable К14)
             return {"id": dup["case_id"], "to": self.qa_address, "cc": last.get("employee", ""), "sent": "already"}
         case = self.store.new_case(last.get("employee", ""), last.get("q", ""), deps, s.get("history", [])[-6:], frags, reason)

@@ -335,3 +335,49 @@ class DeepPassTest(unittest.TestCase):
         self.assertTrue(a["meta"]["deep"]["better"])
         self.assertEqual(a["result"]["verdict"], "answer")
         self.assertTrue(any("копнул глубже" in x for x in t.trace))
+
+
+class ExternalRefInBaseTest(unittest.TestCase):
+    def test_ref_to_document_in_base_is_not_external(self):
+        reg = REG + [{"doc_id": "sub", "department": "DBRCT", "stage": "full_cycle", "department_name": "ДБРЦТ",
+                      "display_title": "Регламент подбора субподрядчика", "title": "Регламент подбора субподрядчика"}]
+        DEPT["sub"] = "DBRCT"
+        t = run_turn("ДБРЦТ: за сколько подавать заявку?", reg, search_for(WINS_EXT), FakeLLM({"ДБРЦТ": "answer"}), session={})
+        self.assertEqual(t.external_refs, [])            # документ «подбора субподрядчика» уже в базе — не «нет в базе»
+        self.assertEqual(t.outcome, "answer")
+
+
+class ConflictRegistryTest(unittest.TestCase):
+    def setUp(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from app.pipeline import text_hash
+        self.ws = WINS + [win("dbr", "1.6", "Заявку подают за пять рабочих дней.", 0.3)]
+        self.f = Path(tempfile.mkdtemp()) / "c.json"
+        self.pair = {"department": "DBRCT", "a": "1.5", "b": "1.6", "why": "разные сроки подачи заявки",
+                     "hash_a": text_hash(WINS[1]["text"]), "hash_b": text_hash("Заявку подают за пять рабочих дней.")}
+        self.json, self.Path = json, Path
+
+    def conf(self, pair):
+        from app.pipeline import load_conflicts
+        self.f.write_text(self.json.dumps({"pairs": [pair]}))
+        log = []
+        return load_conflicts(self.ws, self.f, log), log
+
+    def test_changed_text_not_applied(self):
+        c, log = self.conf({**self.pair, "hash_b": "000000000000"})
+        self.assertEqual(c, {})
+        self.assertTrue(log)
+
+    def test_off_topic_not_applied(self):
+        c, _ = self.conf(self.pair)
+        t = run_turn("ДБРЦТ: кто проводит установочное совещание с командой?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}),
+                     session={}, conflicts=c)
+        self.assertNotEqual(t.outcome, "conflict")
+
+    def test_on_topic_applied_with_pair_id(self):
+        c, _ = self.conf(self.pair)
+        t = run_turn("ДБРЦТ: за сколько подавать заявку?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}), session={}, conflicts=c)
+        self.assertEqual(t.outcome, "conflict")
+        self.assertIn("DBRCT:1.5↔1.6", t.route["why"])

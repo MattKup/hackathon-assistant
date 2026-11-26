@@ -113,26 +113,51 @@ CONFLICT = ("Пункты регламента здесь противореча
             "вы в копии. Ниже — оба пункта.")
 
 
-def load_conflicts(windows, path=None):
-    """Подтверждённые противоречия (config/conflicts_confirmed.json) с текстом пунктов из индекса: {(dep, clause): [pair…]}."""
+def text_hash(text):
+    """Отпечаток текста пункта: пара противоречия подтверждена для ЭТОГО текста; перенумерация или новая редакция —
+    отпечаток не совпал → пара не срабатывает, пока служба качества не подтвердит заново (ревью Fable)."""
+    import hashlib
+    return hashlib.sha1(re.sub(r"\s+", " ", text.lower().replace("ё", "е")).strip()[:600].encode()).hexdigest()[:12]
+
+
+def load_conflicts(windows, path=None, log=None):
+    """Реестр подтверждённых противоречий (config/conflicts_confirmed.json) → {(doc_id, пункт): [пара…]}.
+    Ключ — документ, а не подразделение (у ИБ два документа с совпадающими номерами пунктов)."""
     import json
     from pathlib import Path
     path = Path(path) if path else Path(__file__).resolve().parents[1] / "config" / "conflicts_confirmed.json"
     if not path.exists():
         return {}
-    text = {}
+    by_doc = {}
     for w in windows:
-        text.setdefault((w.get("department"), w.get("clause")), w.get("text", ""))
+        by_doc.setdefault((w.get("doc_id"), w.get("department")), {}).setdefault(w.get("clause"), w)
     out = {}
     for p in json.loads(path.read_text()).get("pairs", []):
-        for x, y in ((p["a"], p["b"]), (p["b"], p["a"])):
-            out.setdefault((p["department"], x), []).append(
-                {"clause": y, "why": p.get("why", ""), "text": text.get((p["department"], y), "")})
+        for (doc_id, dep), cl in by_doc.items():
+            if dep != p["department"] or p["a"] not in cl or p["b"] not in cl:
+                continue
+            if p.get("doc") and p["doc"].lower() not in (cl[p["a"]].get("path", "").lower()):
+                continue
+            wa, wb = cl[p["a"]], cl[p["b"]]
+            if (p.get("hash_a") and p["hash_a"] != text_hash(wa["text"])) or (p.get("hash_b") and p["hash_b"] != text_hash(wb["text"])):
+                if log is not None:
+                    log.append(f"пара {p['a']}↔{p['b']} ({dep}) не применена: текст пункта изменился — подтвердить заново")
+                continue
+            pid = f"{dep}:{p['a']}↔{p['b']}"
+            for x, wy in ((wa, wb), (wb, wa)):
+                out.setdefault((doc_id, x["clause"]), []).append(
+                    {"clause": wy["clause"], "why": p.get("why", ""), "text": wy["text"], "pair": pid})
     return out
 
 
-def apply_conflicts(results, conflicts, tr):
-    """Ответ опирается на пункт из подтверждённой пары противоречий → оба пункта, исход «противоречие» (судья v7: q117, q136, q065, q138)."""
+def _on_topic(question, c):
+    """Пара срабатывает, только если второй пункт пары по теме вопроса (ревью Fable: q081, q101, q134 — не по теме)."""
+    from app.answer.core import stems
+    return len(stems(question) & stems(c["text"] + " " + c["why"])) >= 2
+
+
+def apply_conflicts(results, conflicts, tr, question=""):
+    """Ответ опирается на пункт из подтверждённой пары и второй пункт пары по теме вопроса → оба пункта, «противоречие»."""
     if not conflicts:
         return results
     out = []
@@ -143,8 +168,8 @@ def apply_conflicts(results, conflicts, tr):
             continue
         hits = []
         for st in res.get("steps", []):
-            for c in conflicts.get((st.get("department"), st.get("clause")), []):
-                if c not in hits:
+            for c in conflicts.get((st.get("doc_id"), st.get("clause")), []):
+                if c not in hits and (not question or _on_topic(question, c)):
                     hits.append(c)
         if hits:
             note = "; ".join(f"п. {c['clause']}: {c['why']}" for c in hits)
@@ -310,13 +335,33 @@ def in_scope_llm(llm, question):
 REF_TOP, REF_MIN = 3, 0.5   # отсылка к внешнему документу при «нет ответа» — из 3 лучших пунктов со скором ≥ 0,5
 
 
+_BASE_TITLES = threading.local()      # названия документов в базе — для сверки отсылок (заполняет run_turn)
+
+
+def _in_base(ref):
+    """Отсылка указывает на документ, который ЕСТЬ в базе (ревью Fable: на 300 регламентах «нет в базе» было бы ложным)."""
+    from app.answer.core import stems
+    st = stems(ref)
+    if not st:
+        return False
+    for title in getattr(_BASE_TITLES, "titles", ()):
+        tt = stems(title)
+        if tt and len(st & tt) / len(st) >= 0.6:
+            return True
+    return False
+
+
+def external_only(refs):
+    return sorted(r for r in refs if not _in_base(r))
+
+
 def top_refs(hits):
-    return sorted({ref for h in hits[:REF_TOP] if h.get("score", 0) >= REF_MIN for ref in h.get("external_refs", [])})
+    return external_only({ref for h in hits[:REF_TOP] if h.get("score", 0) >= REF_MIN for ref in h.get("external_refs", [])})
 
 
 def cited_refs(results):
-    """(6) Внешние документы — только из пунктов, на которые опирается ответ."""
-    return sorted({ref for r in results for st in r["result"].get("steps", []) for ref in st.get("external_refs", [])})
+    """(6) Внешние документы — только из пунктов, на которые опирается ответ, и только те, которых нет в базе."""
+    return external_only({ref for r in results for st in r["result"].get("steps", []) for ref in st.get("external_refs", [])})
 
 
 def _search(search_fn, q, allowed, k):
@@ -409,6 +454,8 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer
     session = {} if session is None else session
     c = Counted(llm)
     session["_conflicts"], session["_index"] = conflicts, index
+    _BASE_TITLES.titles = [d.get("display_title") or d.get("title") or "" for d in registry] + \
+                          [d.get("title") or "" for d in registry]
     t = _run_turn(question, registry, search_fn, c, session, workers, answer_cache)
     t.question = t.question or session.get("_effective_q") or question
     session.pop("_effective_q", None)
@@ -426,7 +473,7 @@ def _ask_turn(session, kind, question, text, options, tr, hits, base=None, dep=N
 def _final(results, note, tr, hits, session, question, complex_=False):
     """Ответ готов. Одна дирекция и ответ зависит от условия, не сказанного в вопросе, → уточняющий вопрос (кейс 2);
     правило есть, а случай не оговорён → ответ с оговоркой + автоматическое письмо в службу качества (кейс 1)."""
-    results = apply_conflicts(results, session.get("_conflicts"), tr)
+    results = apply_conflicts(results, session.get("_conflicts"), tr, question)
     shown = [r for r in results if r["result"]["verdict"] != "no_answer"]
     if len(shown) == 1 and not session.get("no_clarify") and not any(r["result"]["verdict"] == "conflict" for r in shown) and session.get("clarifications", 0) < 2:
         r = shown[0]
@@ -450,7 +497,9 @@ def _final(results, note, tr, hits, session, question, complex_=False):
     if t.outcome == "conflict":
         tr.append("Пункты регламента противоречат друг другу — отправляю вопрос в службу качества")
         t.text = CONFLICT + (" " + note if note else "")
-        t.route = {"to": "служба качества", "email": True, "why": "противоречие между пунктами регламента"}
+        pairs = sorted({c["pair"] for r in results for c in r["result"].get("conflict_with", []) if c.get("pair")})
+        t.route = {"to": "служба качества", "email": True,
+                   "why": "противоречие между пунктами регламента" + (": " + ", ".join(pairs) if pairs else "")}
     elif not_covered(results, complex_):
         tr.append("Правило есть, но случай сотрудника в нём не оговорён — отправляю вопрос в службу качества")
         t.text = (NOT_COVERED + (" " + note if note else ""))
