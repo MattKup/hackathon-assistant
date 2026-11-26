@@ -129,7 +129,8 @@ class PermitBanTest(unittest.TestCase):
     def test_permit_vs_ban_downgraded(self):
         out = check(self.raw("Да, вы можете быть ГИП по другой теме, если не являетесь единственным исполнителем по ней."), self.W, "Могу ли я быть ГИП?")
         self.assertEqual(out["verdict"], "answer_with_caveat")
-        self.assertIn("не может быть назначен ГИП", out["caveat"])
+        self.assertIn("не может быть назначен ГИП", out["summary"])
+        self.assertNotIn("Да, вы можете", out["summary"])
 
     def test_negative_answer_not_touched(self):
         out = check(self.raw("Нет, вы не можете быть ГИП по теме, где вы единственный исполнитель."), self.W, "Могу ли я быть ГИП?")

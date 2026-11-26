@@ -237,10 +237,14 @@ def check(raw, windows, question=""):
             out["caveat"] = " ".join(x for x in _sentences(out["caveat"]) if not (set(NUM.findall(x)) - src))
     # разрешение в ответе при запрете в процитированном пункте → оговорка с цитатой запрета (судья: q145 «Да, можете…»)
     if out["steps"] and out.get("verdict") == "answer" and PERMIT.search(out.get("summary", "")):
-        bans = [x for st in out["steps"] for x in _sentences(st["source_text"]) if BAN.search(x) and _ban_applies(out["summary"], x)]
+        bans = [(st["clause"], x) for st in out["steps"] for x in _sentences(st["source_text"]) if BAN.search(x) and _ban_applies(out["summary"], x)]
         if bans:
+            clause, ban = bans[0]
             out["verdict"] = "answer_with_caveat"
-            out["caveat"] = ((out.get("caveat") or "") + f" В пункте есть запрет: «{bans[0].strip()[:220]}» — проверьте, не относится ли он к вашему случаю.").strip()
+            out["summary_replaced"] = out.get("summary", "")
+            # разрешение модели не показываем: сотрудник читает краткий ответ первым (судья v9: q145 «Да, можете…» осталось сверху)
+            out["summary"] = f"Однозначного разрешения в регламенте нет. По п. {clause}: «{ban.strip()[:260]}»"
+            out["caveat"] = ((out.get("caveat") or "") + " Проверьте, не относится ли этот запрет к вашему случаю; при сомнении — уточните у службы качества.").strip()
             out["permit_vs_ban"] = True
     if raw.get("verdict") in ("answer", "answer_with_caveat", "conflict") and raw.get("steps") and not out["steps"]:
         out["verdict"] = "no_answer"
