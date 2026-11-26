@@ -234,8 +234,11 @@ class UniversalTest(unittest.TestCase):
         t = run_turn("За сколько запускать расчёт конкурса?", REG, search_for(WINS), llm, session={"no_clarify": True})
         self.assertNotEqual(t.outcome, "out_of_scope")           # лучший пункт 0,9 ≥ 0,5 — отвечаем
         weak = [dict(w, score=0.2) for w in WINS]
-        t = run_turn("Какой ноутбук купить?", REG, search_for(weak), self.IntentLLM("out_of_scope"), session={})
+        t = run_turn("Какой ноутбук купить?", REG, search_for(weak), self.IntentLLM("out_of_scope", scope=False), session={})
         self.assertEqual(t.outcome, "out_of_scope")
+        # Г1 (ревью Fable): разбор сказал «вне», а классификатор темы — «про правила компании» → письмо в СК, не «вне»
+        t = run_turn("Сколько платят суточные в командировке к клиенту?", REG, search_for(weak), self.IntentLLM("out_of_scope"), session={})
+        self.assertEqual(t.outcome, "escalate")
 
     def test_large_base_bounded(self):
         reg, wins = [], []

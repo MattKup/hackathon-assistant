@@ -14,7 +14,9 @@ import json
 import os
 import sys
 import time
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,16 +60,19 @@ def main(corpus_rel, eval_rel, *rest):
         dept_doc.setdefault(d["department"], []).append(d["doc_id"])
     tei = TEI(os.environ["TEI_EMBED_URL"], os.environ["TEI_RERANK_URL"])
     vecs = tei.embed([w["path"] + "\n" + w["text"] for w in windows])
-    tei_chars, by_step = Counter(), Counter()     # экономика: знаки, отправленные в эмбеддинги и реранкер на запрос
+    by_step = Counter()
+    tei_chars, _tl = Counter(), threading.Lock()   # экономика: знаки в эмбеддинги и реранкер — итог на прогон (вопросы идут параллельно)
 
     def embed_c(texts):
-        tei_chars["embed_chars"] += sum(len(t) for t in texts)
-        tei_chars["embed_calls"] += 1
+        with _tl:
+            tei_chars["embed_chars"] += sum(len(t) for t in texts)
+            tei_chars["embed_calls"] += 1
         return tei.embed(texts)
 
     def rerank_c(q, texts):
-        tei_chars["rerank_chars"] += len(q) * len(texts) + sum(len(t) for t in texts)
-        tei_chars["rerank_calls"] += 1
+        with _tl:
+            tei_chars["rerank_chars"] += len(q) * len(texts) + sum(len(t) for t in texts)
+            tei_chars["rerank_calls"] += 1
         return tei.rerank(q, texts)
     hy = Hybrid(windows, vecs, embed_c, rerank_c)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
@@ -84,82 +89,92 @@ def main(corpus_rel, eval_rel, *rest):
         items = items[: int(limit)]
     stats, times, by_class = Counter(), [], Counter()
     pc0 = llm.prefix_cache() if hasattr(llm, "prefix_cache") else None
-    with open(run_dir / "answers.jsonl", "w") as fh:
-        for e in items:
-            q = e["question"]
-            t0 = time.time()
-            try:
-                sess = {"no_clarify": no_clarify}
-                t1 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
-                row = {"id": e["id"], "class": e["class"], "question": q, "turn1": turn_dict(t1)}
-                exp = e["expected"]["outcome"]
-                ok = t1.outcome in EXPECT.get(exp, {exp})
-                if e["class"] == "same_across" and t1.outcome == "clarify":
-                    row["extra_clarify"] = True          # лишнее уточнение: считаем отдельно
-                if e["class"] == "complex_project":
-                    ok = ok and len(t1.answers) >= 2
-                stage_q = e["expected"].get("clarify_dimension") == "stage"
-                if stage_q and t1.outcome in ANSWERED and both_ib_stages(t1, docs):
-                    ok = True
-                    row["stage_both"] = True
-                if no_clarify and exp in ("clarify", "compare_all") and not stage_q:
-                    ok = t1.outcome in ANSWERED and len(answered_depts(t1)) >= 2
-                row["answered_depts"] = answered_depts(t1)
-                if t1.outcome == "ask":
-                    # режим диалога: уточнение условия/темы. Для классов, где эталон ждёт уточнения, — это уточнение;
-                    # для остальных — второй ход с первым вариантом, засчитывается по его исходу (отдельно считаем asked)
-                    row["asked"] = [o["label"] for o in t1.options]
-                    sess["ask_reply"] = t1.options[0]["label"]
-                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
-                    row["turn2_choice"], row["turn2"] = t1.options[0]["label"], turn_dict(t2)
-                    ok = exp in ("clarify", "compare_all") or t2.outcome in EXPECT.get(exp, {exp})
-                    tok2 = t2.tokens
-                    t1.tokens = add_tokens(t1.tokens, tok2)
-                row["outcome_ok"] = ok
-                if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
-                    alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
-                    sess.update(docs=alld, clarifications=1)
-                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
-                    t1.tokens = add_tokens(t1.tokens, t2.tokens)
-                    row["turn2_choice"] = "не знаю → все варианты"
-                    row["turn2"] = turn_dict(t2)
-                    row["outcome_ok"] = ok = ok and len(t2.answers) >= 2
-                elif t1.outcome == "clarify" and e["expected"].get("clarify_options"):
-                    dep = e["expected"]["clarify_options"][0]
-                    sess.update(docs=dept_doc.get(dep, []), clarifications=1)
-                    t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
-                    t1.tokens = add_tokens(t1.tokens, t2.tokens)
-                    row["turn2_choice"] = dep
-                    row["turn2"] = turn_dict(t2)
-                exp_clauses = {c["clause"] for v in (e["expected"].get("by_department") or {}).values() for c in v["citations"]}
-                got = {s["clause"] for a in (row.get("turn2") or row["turn1"])["answers"] for s in a["result"]["steps"]}
-                row["cite_hit"] = bool(exp_clauses & got) if exp_clauses else None
-                row["tokens"] = {**t1.tokens, "tei_chars": dict(tei_chars)}
-                for step, b in (t1.tokens.get("by_step") or {}).items():
-                    for k, v in b.items():
-                        by_step[(step, k)] += v
-                for k, v in tei_chars.items():
-                    stats["tei_" + k] += v
-                tei_chars.clear()
-                for k, v in ((k, v) for k, v in t1.tokens.items() if k != "by_step"):
-                    stats["tok_" + k] += v
-                stats["asked"] += 1 if row.get("asked") else 0
-                dps = [a["meta"].get("deep") for a in (row.get("turn2") or row["turn1"])["answers"] if a["meta"].get("deep")]
-                stats["deep"] += len(dps)
-                stats["deep_better"] += sum(1 for d in dps if d["better"])
-                stats["auto_mail"] += 1 if (t1.route or {}).get("email") and t1.outcome != "escalate" else 0
-            except Exception as ex:  # сбой одного вопроса не останавливает прогон
-                row = {"id": e["id"], "class": e["class"], "question": q, "error": str(ex)[:300], "outcome_ok": False}
-                stats["errors"] += 1
-            row["seconds"] = round(time.time() - t0, 2)
-            times.append(row["seconds"])
-            stats["ok" if row["outcome_ok"] else "bad"] += 1
-            stats["extra_clarify"] += 1 if row.get("extra_clarify") else 0
-            by_class[(e["class"], row["outcome_ok"])] += 1
-            if row.get("cite_hit") is not None:
-                stats["cite_hit" if row["cite_hit"] else "cite_miss"] += 1
+
+    def process(e):
+        """Один вопрос эталона (потокобезопасно: свои счётчики, сливаются в порядке эталона)."""
+        st, bs, bc = Counter(), Counter(), Counter()
+        q = e["question"]
+        t0 = time.time()
+        try:
+            sess = {"no_clarify": no_clarify}
+            t1 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+            row = {"id": e["id"], "class": e["class"], "question": q, "turn1": turn_dict(t1)}
+            exp = e["expected"]["outcome"]
+            ok = t1.outcome in EXPECT.get(exp, {exp})
+            if e["class"] == "same_across" and t1.outcome == "clarify":
+                row["extra_clarify"] = True          # лишнее уточнение: считаем отдельно
+            if e["class"] == "complex_project":
+                ok = ok and len(t1.answers) >= 2
+            stage_q = e["expected"].get("clarify_dimension") == "stage"
+            if stage_q and t1.outcome in ANSWERED and both_ib_stages(t1, docs):
+                ok = True
+                row["stage_both"] = True
+            if no_clarify and exp in ("clarify", "compare_all") and not stage_q:
+                ok = t1.outcome in ANSWERED and len(answered_depts(t1)) >= 2
+            row["answered_depts"] = answered_depts(t1)
+            if t1.outcome == "ask":
+                # режим диалога: уточнение условия/темы. Для классов, где эталон ждёт уточнения, — это уточнение;
+                # для остальных — второй ход с первым вариантом, засчитывается по его исходу (отдельно считаем asked)
+                row["asked"] = [o["label"] for o in t1.options]
+                sess["ask_reply"] = t1.options[0]["label"]
+                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+                row["turn2_choice"], row["turn2"] = t1.options[0]["label"], turn_dict(t2)
+                ok = exp in ("clarify", "compare_all") or t2.outcome in EXPECT.get(exp, {exp})
+                tok2 = t2.tokens
+                t1.tokens = add_tokens(t1.tokens, tok2)
+            row["outcome_ok"] = ok
+            if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
+                alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
+                sess.update(docs=alld, clarifications=1)
+                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+                t1.tokens = add_tokens(t1.tokens, t2.tokens)
+                row["turn2_choice"] = "не знаю → все варианты"
+                row["turn2"] = turn_dict(t2)
+                row["outcome_ok"] = ok = ok and len(t2.answers) >= 2
+            elif t1.outcome == "clarify" and e["expected"].get("clarify_options"):
+                dep = e["expected"]["clarify_options"][0]
+                sess.update(docs=dept_doc.get(dep, []), clarifications=1)
+                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+                t1.tokens = add_tokens(t1.tokens, t2.tokens)
+                row["turn2_choice"] = dep
+                row["turn2"] = turn_dict(t2)
+            exp_clauses = {c["clause"] for v in (e["expected"].get("by_department") or {}).values() for c in v["citations"]}
+            got = {s["clause"] for a in (row.get("turn2") or row["turn1"])["answers"] for s in a["result"]["steps"]}
+            row["cite_hit"] = bool(exp_clauses & got) if exp_clauses else None
+            row["tokens"] = dict(t1.tokens)
+            for step, b in (t1.tokens.get("by_step") or {}).items():
+                for k, v in b.items():
+                    bs[(step, k)] += v
+            for k, v in ((k, v) for k, v in t1.tokens.items() if k != "by_step"):
+                st["tok_" + k] += v
+            st["asked"] += 1 if row.get("asked") else 0
+            dps = [a["meta"].get("deep") for a in (row.get("turn2") or row["turn1"])["answers"] if a["meta"].get("deep")]
+            st["deep"] += len(dps)
+            st["deep_better"] += sum(1 for d in dps if d["better"])
+            st["auto_mail"] += 1 if (t1.route or {}).get("email") and t1.outcome != "escalate" else 0
+        except Exception as ex:  # сбой одного вопроса не останавливает прогон
+            row = {"id": e["id"], "class": e["class"], "question": q, "error": str(ex)[:300], "outcome_ok": False}
+            st["errors"] += 1
+        row["seconds"] = round(time.time() - t0, 2)
+        pass
+        st["ok" if row["outcome_ok"] else "bad"] += 1
+        st["extra_clarify"] += 1 if row.get("extra_clarify") else 0
+        bc[(e["class"], row["outcome_ok"])] += 1
+        if row.get("cite_hit") is not None:
+            st["cite_hit" if row["cite_hit"] else "cite_miss"] += 1
+        print(e["id"], e["class"], row.get("turn1", {}).get("outcome"), row["outcome_ok"], row["seconds"], flush=True)
+        return row, st, bs, bc
+
+    workers = int(os.environ.get("EVAL_WORKERS", "4"))   # вопросы параллельно (vLLM батчит): ≈ 2× быстрее при 4
+    with open(run_dir / "answers.jsonl", "w") as fh, ThreadPoolExecutor(max_workers=workers) as ex:
+        for row, st, bs, bc in ex.map(process, items):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-            print(e["id"], e["class"], row.get("turn1", {}).get("outcome"), row["outcome_ok"], row["seconds"], flush=True)
+            stats.update(st)
+            by_step.update(bs)
+            by_class.update(bc)
+            times.append(row["seconds"])
+    for k, v in tei_chars.items():
+        stats["tei_" + k] += v
     times.sort()
     classes = sorted({c for c, _ in by_class})
     pc1 = llm.prefix_cache() if pc0 else None

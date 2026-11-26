@@ -14,14 +14,16 @@ from pathlib import Path
 PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 SYSTEM = (PROMPTS / "system_answer.md").read_text()
 # Г3 (26.11, разбор v2): модель держала ответ, когда слова вопроса не совпадали с терминами пункта
-MATCH_RULE = ("\n\nСопоставление слов. Сотрудники пишут разговорно, жаргоном, по-английски, с опечатками и пропусками букв. "
+MATCH_RULE = ("3c. Сопоставление слов. Сотрудники пишут разговорно, жаргоном, по-английски, с опечатками и пропусками букв. "
               "Слова вопроса сопоставляй с терминами фрагментов по смыслу (действие, документ, роль, событие); строка "
-              "«Тот же вопрос словами регламента» — подсказка для этого. Если фрагмент по смыслу отвечает на вопрос — это ответ, "
-              "а не no_answer, даже если слов вопроса в нём нет. Цитаты, роли, сроки и условия — по-прежнему только дословно "
-              "из фрагментов; ничего не достраивай.")
+              "«Тот же вопрос словами регламента» — подсказка для этого, не факт. Если фрагмент по смыслу отвечает на вопрос — "
+              "это ответ, а не no_answer, даже если слов вопроса в нём нет. Сопоставление касается только слов: если во "
+              "фрагментах нет запрошенного числа, срока, лица или признака случая — действует п. 3a. Цитаты, роли, сроки и "
+              "условия — только дословно из фрагментов; ничего не достраивай.\n")
 import os as _os
-if "G3" not in set(_os.environ.get("HK_OFF", "").split(",")):
-    SYSTEM += MATCH_RULE
+_OFF = set(_os.environ.get("HK_OFF", "").split(","))
+if "G3" not in _OFF:
+    SYSTEM = SYSTEM.replace("\n3. Если фрагменты", "\n" + MATCH_RULE + "3. Если фрагменты", 1)
 SCHEMA = json.loads((PROMPTS / "answer.schema.json").read_text())
 NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
@@ -246,6 +248,13 @@ def check(raw, windows, question=""):
         if set(NUM.findall(out.get("summary", ""))) - src or foreign_entities(out.get("summary", ""), cited, q):
             out["summary_replaced"] = out.get("summary", "")
             out["summary"] = " ".join(st["text"] for st in out["steps"][:2])
+        elif "G7" not in _OFF and out.get("summary"):
+            # Г7 (ревью Fable): каждое предложение краткого ответа — с ≥ 2 общими основами с процитированными пунктами
+            cs = stems(cited)
+            keep = [x for x in _sentences(out["summary"]) if len(stems(x) & cs) >= 2 or len(stems(x)) < 2]
+            if len(keep) < len(_sentences(out["summary"])):
+                out["summary_replaced"] = out["summary"]
+                out["summary"] = " ".join(keep) or " ".join(st["text"] for st in out["steps"][:2])
         if out.get("caveat") and set(NUM.findall(out["caveat"])) - src:
             out["caveat"] = " ".join(x for x in _sentences(out["caveat"]) if not (set(NUM.findall(x)) - src))
     # разрешение в ответе при запрете в процитированном пункте → оговорка с цитатой запрета (судья: q145 «Да, можете…»)

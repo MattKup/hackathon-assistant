@@ -446,13 +446,15 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer
     session["_conflicts"], session["_index"] = conflicts, index
     _BASE_TITLES.titles = [d.get("display_title") or d.get("title") or "" for d in registry] + \
                           [d.get("title") or "" for d in registry]
-    t = _run_turn(question, registry, search_fn, c, session, workers, answer_cache)
+    try:
+        t = _run_turn(question, registry, search_fn, c, session, workers, answer_cache)
+    finally:
+        if session.pop("_nc_turn", False):       # «не знаю дирекцию» — режим без уточнения только на этот ход
+            session.pop("no_clarify", None)
     t.question = t.question or session.get("_effective_q") or question
     session.pop("_effective_q", None)
     session.pop("_conflicts", None)
     session.pop("_index", None)
-    if session.pop("_nc_turn", False):           # «не знаю дирекцию» — режим без уточнения только на этот ход
-        session.pop("no_clarify", None)
     t.tokens = c.t
     return t
 
@@ -579,10 +581,13 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
     terms = "" if "G3" in OFF else "; ".join(queries[1:])
     # Г2: сотрудник сам пишет, что не знает подразделение → не переспрашивать, ответы по всем (на этот ход)
-    if u.get("dept_unknown") and "G2" not in OFF and not session.get("no_clarify"):
+    if u.get("dept_unknown") and "G2" not in OFF and not session.get("no_clarify") and not mentioned(question, registry) \
+            and not u.get("departments"):
         session["no_clarify"] = session["_nc_turn"] = True
         tr.append("Вы не знаете дирекцию — сравниваю ответы всех дирекций")
-    named = mentioned(question, registry) or _docs_for(set(u.get("departments") or []), "" if "G4" not in OFF else u.get("stage", ""), registry)
+    by_model = _docs_for(set(u.get("departments") or []), "" if "G4" not in OFF else u.get("stage", ""), registry)
+    named = (list(dict.fromkeys(mentioned(question, registry) + by_model)) if "G5" not in OFF
+             else mentioned(question, registry) or by_model)
     if named:
         tr.append("Дирекция названа в вопросе")
     # названная в вопросе дирекция важнее выбранной ранее в диалоге (ревью Fable 26.11: «А в ДБРЦТ…» после выбора ТД
@@ -656,10 +661,10 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             tr.append("Пункт отсылает к документу, которого нет в базе, — называю его")
             return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: " + "; ".join(ext),
                         answers=results, trace=tr, hits=hits, external_refs=ext)
-        if (best < OOS_SUPPORT or "G1" in OFF) and not in_scope_llm(llm, question):
+        if (intent == "out_of_scope" or best < OOS_SUPPORT or "G1" in OFF) and not in_scope_llm(llm, question):
             tr.append("Ответа нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
             r = route_for(question)
-            return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
+            return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits, answers=results)
         tr.append("В найденных пунктах ответа нет — отправляю вопрос в службу качества")
         return Turn("escalate", "В регламентах прямого ответа нет. Я отправил вопрос в службу качества, вы в копии.",
                     route={"to": "служба качества", "email": True}, answers=results, trace=tr, hits=hits)
@@ -669,7 +674,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             return escalate_or_scope(results)
         return _final(results, note, tr, hits, session, question, complex_)
 
-    if intent == "out_of_scope" and best < OOS_SUPPORT:
+    if intent == "out_of_scope" and best < OOS_SUPPORT and ("G1" in OFF or not in_scope_llm(llm, question)):
         tr.append("Вопрос не про процессы компании, и сильной опоры в регламентах нет — подсказываю, куда обратиться")
         r = route_for(question)
         return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
@@ -737,8 +742,11 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         ws = budget(sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"]))
         q = question + (COMPLEX_NOTE.format(dept=names.get(dep, dep)) if complex_ else "")
         ws = fit_tokens(llm, q, ws, names.get(dep, dep))
+        from app.answer.core import stems as _st
+        wst = _st(" ".join(w["text"] for w in ws))
+        t_dep = "; ".join(x for x in terms.split("; ") if x and _st(x) and len(_st(x) & wst) * 2 >= len(_st(x))) if terms else ""
         try:
-            res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache, terms)
+            res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache, t_dep)
         except Exception as e:             # сбой по одной дирекции не роняет весь ход (ревью Fable К12)
             res = {"verdict": "no_answer", "summary": "", "steps": [], "rejected": [], "caveat": "",
                    "missing": "ответ не получен из-за сбоя модели", "error": str(e)[:120]}
@@ -747,7 +755,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         if why:
             try:
                 d = deep_pass(llm, q, dep, names.get(dep, dep), ws, res, meta, search_fn,
-                              [x for x in deep if by_id[x]["department"] == dep], index, answer_cache, why, terms)
+                              [x for x in deep if by_id[x]["department"] == dep], index, answer_cache, why, t_dep)
             except Exception as e:
                 d, meta["deep_error"] = None, str(e)[:120]
             if d:
