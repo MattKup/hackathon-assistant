@@ -87,6 +87,8 @@ sup.fn:hover,sup.fn.on{background:var(--brand-soft)}
 .chip:hover{border-color:var(--ink)}
 .chip.ghost{color:var(--muted)}
 .note{background:var(--soft);border-radius:10px;padding:10px 12px;margin-top:10px}
+.handed{display:flex;gap:10px;align-items:flex-start;background:var(--green-soft);color:var(--ink);border-radius:10px;padding:10px 12px;margin-top:10px}
+.handed b{color:var(--green)}
 details.how{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
 details.how summary{cursor:pointer;color:var(--muted)}
 details.how ol{margin:6px 0 2px;padding-left:18px;color:var(--muted);font-size:13px}
@@ -252,6 +254,7 @@ nav button{padding:7px 10px}
     <div class="card"><div class="hd"><b>Чего нет в регламентах</b><span class="sub">вопросы без ответа</span></div><div class="list" id="statNo"></div></div>
     <div class="card"><div class="hd"><b>Как отвечает помощник</b><span class="sub">исходы диалогов</span></div><div class="bd" id="statOut"></div></div>
   </div>
+  <div class="card" style="margin-bottom:16px"><div class="hd"><b>Повторяющиеся вопросы</b><span class="sub" id="repSub"></span></div><div class="list" id="statRep"></div></div>
   <div class="card"><div class="hd"><b>Журнал запросов</b><span class="sub">последние</span></div><div class="tbl"><table><thead><tr><th>Время</th><th>Вопрос</th><th>Итог</th><th>Шагов</th><th>Время ответа</th></tr></thead><tbody id="statLog"></tbody></table></div></div>
 </section>
 
@@ -312,6 +315,11 @@ async function ask(question, choice, choiceLabel){
   session = r.session; add(render(r), "bot"); bind();
 }
 
+// плашка «вопрос передан»: сотрудник видит, что вопрос ушёл в службу качества и куда придёт ответ
+const handed = c => c.sent ? `<div class="handed">✉️ <span><b>Вопрос передан в службу качества</b> (обращение ${esc(c.id)}).
+  ${c.sent === "already" ? "Этот вопрос уже передан ранее — ответ придёт в то же письмо." : "Ответ придёт вам на почту — вы в копии письма."}
+  Итоговый ответ эксперта попадёт в базу знаний помощника.</span></div>`
+  : `<div class="note">✉️ Не удалось передать вопрос: ${esc(c.error || "")}</div>`;
 function render(r){
   let h = "";
   if (r.outcome === "clarify") {
@@ -340,14 +348,14 @@ function render(r){
     if (used.length) h += `<div class="lbl">Подтверждено источниками</div><div class="srcs">` + Object.values(uniq).map(({s, ns}) =>
       `<div class="src" data-n="${ns[0]}"><span>📄</span><div><div class="t">${s.practice ? "Практика службы качества" : esc(s.doc_title)}</div><div class="s">${s.practice ? "подтверждена экспертом" : `${esc(s.label || ("п. " + s.clause))}${s.section ? " · " + esc(s.section) : ""}`} · сноски ${ns.join(", ")}</div></div>
        <span class="badge ${s.practice ? "a" : "g"} ml">${s.practice ? "практика" : "действует"}</span></div>`).join("") + `</div>`;
-    if (r.case) h += `<div class="note">✉️ ${r.case.sent ? "Вопрос отправлен в службу качества · копия — вам" : "Письмо не отправлено: " + esc(r.case.error || "")}</div>`;
+    if (r.case) h += handed(r.case);
     else if (["answer_with_caveat","conflict"].includes(r.outcome)) h += `<div class="chips"><button class="chip" data-escalate="1">Уточнить у службы качества</button></div>`;
   } else if (r.outcome === "ask") {
     h += `<p class="lead">${esc(r.text)}</p><div class="chips">` + r.options.map(o => `<button class="chip${/Не знаю|службу качества/.test(o.label) ? " ghost" : ""}" data-choice="${o.id}" data-ask="1">${esc(o.label)}</button>`).join("") + `</div>`;
   } else if (r.outcome === "document") {
     h += `<p class="lead">${esc(r.text)}</p><div class="srcs">` + r.documents.map(d => `<div class="src"><span>📄</span><div><div class="t">${esc(d.title)}</div><div class="s">${esc(d.label)} · ${d.sections.slice(0,3).map(esc).join("; ")}</div></div></div>`).join("") + `</div>`;
   } else if (r.outcome === "escalate") {
-    h += `<p class="lead">${esc(r.text)}</p>` + (r.case ? `<div class="note">✉️ ${r.case.sent ? `Письмо отправлено в службу качества · копия — вам` : `Письмо не отправлено: ${esc(r.case.error)}`}</div>` : "");
+    h += `<p class="lead">${esc(r.text)}</p>` + (r.case ? handed(r.case) : "");
   } else {
     h += `<p class="lead">${esc(r.text)}</p>` + (r.route ? `<div class="note">Куда обратиться: ${esc(r.route.to)}</div>` : "");
   }
@@ -377,7 +385,7 @@ function bind(){
   $$("[data-multigo]").forEach(b => b.onclick = () => { const ids = [...b.closest(".multi").querySelectorAll("input:checked")].map(i => i.value);
     if (ids.length) { ask("", ids.join(","), "Проект нескольких дирекций: " + ids.map(i => DEP[i]).join(" + ")); $("#ctx").textContent = "· " + ids.map(i => DEP[i]).join(" + "); } });
   $$("[data-escalate]").forEach(b => b.onclick = async () => { b.disabled = true; const r = await api("/api/escalate", {session});
-    b.parentElement.outerHTML = `<div class="note">✉️ ${r.case?.sent ? "Письмо отправлено в службу качества · копия — вам" : "Не удалось отправить письмо"}</div>`; });
+    b.parentElement.outerHTML = handed(r.case || {error:"нет ответа сервера"}); });
   $$("[data-fb]").forEach(b => b.onclick = () => { b.parentElement.querySelectorAll("[data-fb]").forEach(x => x.classList.remove("on")); b.classList.add("on"); api("/api/feedback", {session, value:b.dataset.fb}); });
 }
 
@@ -478,6 +486,10 @@ async function loadStats(){
   $("#statKpis").innerHTML = kpi("Вопросов", tot) + kpi("С ответом", pct(answered), answered + " вопросов") + kpi("Уточнений дирекции", pct(o.clarify||0), (o.clarify||0) + " раз")
     + kpi("В службу качества", a.cases, "обращений") + kpi("Время ответа p95", a.p95 != null ? String(a.p95).replace(".", ",") + " с" : "—", "p50 " + (a.p50 != null ? String(a.p50).replace(".", ",") : "—") + " с");
   $("#statNo").innerHTML = a.no_answer_top.length ? a.no_answer_top.map(([q, n], i) => `<div class="row"><span class="num">${String(i+1).padStart(2,"0")}</span><span>${esc(q)}</span><span class="badge ml">${n}</span></div>`).join("") : `<div class="empty">Пока всё нашлось</div>`;
+  const rp = a.repeats || {groups:[]};
+  $("#repSub").textContent = `переданы в службу качества за ${rp.period_days} дн. · сигнал СК от ${rp.threshold} раз`;
+  $("#statRep").innerHTML = rp.groups.length ? rp.groups.map(g => `<div class="row"><span class="badge ${g.signal ? "r" : ""}">${g.count}×</span><span>${esc(g.question)}${g.variants.length > 1 ? `<div class="meta">другими словами: ${g.variants.slice(1, 4).map(esc).join(" · ")}</div>` : ""}</span>
+    ${g.signal ? `<span class="badge r ml">сигнал службе качества</span>` : ""}</div>`).join("") : `<div class="empty">Повторов нет</div>`;
   const ent = Object.entries(o).sort((x,y) => y[1]-x[1]);
   $("#statOut").innerHTML = ent.length ? ent.map(([k, v]) => `<div style="display:flex;gap:10px;align-items:center;margin:8px 0"><span style="width:190px">${OUT[k]||k}</span>
     <div class="bar" style="flex:1;margin:0"><span style="width:${100*v/tot}%;background:var(--ink)"></span></div><span class="meta" style="width:30px;text-align:right">${v}</span></div>`).join("") : `<div class="empty">Пока нет вопросов</div>`;

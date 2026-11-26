@@ -19,6 +19,8 @@ from app.answer.cache import AnswerCache
 from app.dialog.clarify import label
 from app.escalation import draft as qa_draft
 from app.escalation import mail
+from app.escalation import repeats
+from app.escalation.repeats import Repeats
 from app.escalation.process import practice_windows, process_replies
 from app.escalation.store import Store
 from app.ingest.upload import Uploads, parse_multipart
@@ -106,6 +108,9 @@ class App:
             self._pc0 = self.llm.prefix_cache()
             self.Hybrid = Hybrid
             self._rebuild_real()
+        rc = repeats.settings()                  # мониторинг повторов: период, порог, похожесть — из конфигурации
+        similar = repeats.words_similar(rc["similarity_words"]) if mock else repeats.vectors_similar(self.tei.embed, rc["similarity"])
+        self.repeats = Repeats(self.store.db, similar, rc)
 
     # --- индекс (регламенты + опубликованная практика) ---
     def all_windows(self):
@@ -196,7 +201,8 @@ class App:
                 "p50": times[len(times) // 2] if times else None, "p95": times[max(0, int(len(times) * .95) - 1)] if times else None,
                 "no_answer_top": noans.most_common(10), "cases": len(self.store.cases()),
                 "practices": sum(1 for p in self.store.practices(only_published=False) if p["status"] == "published"),
-                "recent": rows[-15:][::-1], "cache": self.cache_stats()}
+                "recent": rows[-15:][::-1], "cache": self.cache_stats(),
+                "repeats": {"groups": self.repeats.groups()[:10], **{k: self.repeats.conf[k] for k in ("period_days", "threshold")}}}
 
     def search(self, q, allowed, k=16):
         """Практика ищется вместе с документом подразделения: allowed расширяется practice:<dep>."""
@@ -274,13 +280,17 @@ class App:
         deps = last.get("depts") or sorted({label(d, self.registry) for d in self.registry if d["doc_id"] in (s.get("docs") or [])})
         dup = next((c for c in self.store.cases() if c["question"] == last.get("q", "") and c["employee"] == last.get("employee", "")
                     and time.time() - c["created"] < 2 * 3600 and c["status"] in ("sent", "interim")), None)
+        own_repeat = dup is not None              # повтор того же сотрудника не считаем — иначе один человек «накрутит» порог
         if dup is None and reason.startswith("противоречие") and ":" in reason:
             # по одной паре противоречия служба качества получает одно письмо, а не на каждый вопрос (ревью Fable)
             dup = next((c for c in self.store.cases() if c["reason"] == reason and time.time() - c["created"] < 7 * 86400
                         and c["status"] in ("sent", "interim")), None)
         if dup:                                   # тот же вопрос того же сотрудника — новое письмо не шлём (ревью Fable К14)
+            if not own_repeat:
+                self._count_repeat(last.get("q", ""), last.get("employee", ""), dup["case_id"], reason)
             return {"id": dup["case_id"], "to": self.qa_address, "cc": last.get("employee", ""), "sent": "already"}
         case = self.store.new_case(last.get("employee", ""), last.get("q", ""), deps, s.get("history", [])[-6:], frags, reason)
+        self._count_repeat(case["question"], case["employee"], case["case_id"], reason)
 
         def work():
             """Черновик для эксперта (второй проход LLM) → письмо в СК. В фоне: сотрудник не ждёт."""
@@ -296,6 +306,18 @@ class App:
                 self.store.save_draft(case["case_id"], d, False)
         threading.Thread(target=work, daemon=True).start()
         return {"id": case["case_id"], "to": self.qa_address, "cc": last.get("employee", ""), "sent": "queued"}
+
+    def _count_repeat(self, question, employee, case_id, reason):
+        """«Этот вопрос передавали N раз за период» → письмо-сигнал СК (одно на вопрос за период). В фоне: эмбеддинги."""
+        def work():
+            try:
+                r = self.repeats.record(question, employee, case_id, reason)
+                if r["signal"]:
+                    mail.send(repeats.signal_email(r["signal"], self.qa_address), *self.smtp)
+                    self.repeats.mark_sent(r["signal"]["signal_id"])
+            except Exception:
+                pass                              # сигнал — дополнительный; сбой не мешает обращению
+        threading.Thread(target=work, daemon=True).start()
 
     def poll_mail(self):
         ev = process_replies(self.store, self.mailpit, self.llm)
