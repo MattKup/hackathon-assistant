@@ -82,6 +82,9 @@ ASK_DONT_KNOW = "Не знаю"
 ASK_SEND = "Отправить вопрос в службу качества"
 NOT_COVERED = "Ваш случай в регламенте прямо не оговорён — я отправил вопрос в службу качества, вы в копии. Ниже — правило, которое есть."
 
+CONFLICT = ("Пункты регламента здесь противоречат друг другу — однозначного ответа нет. Я отправил вопрос в службу качества, "
+            "вы в копии. Ниже — оба пункта.")
+
 
 def outcome_of(results):
     verdicts = [r["result"]["verdict"] for r in results]
@@ -171,7 +174,11 @@ def _final(results, note, tr, hits, session, question):
             session["ask"]["hits"] = hits[:5]
             return t
     t = Turn(outcome_of(results), note, answers=results, trace=tr, hits=hits, external_refs=cited_refs(results))
-    if not_covered(results):
+    if t.outcome == "conflict":
+        tr.append("Пункты регламента противоречат друг другу — отправляю вопрос в службу качества")
+        t.text = CONFLICT + (" " + note if note else "")
+        t.route = {"to": "служба качества", "email": True, "why": "противоречие между пунктами регламента"}
+    elif not_covered(results):
         tr.append("Правило есть, но случай сотрудника в нём не оговорён — отправляю вопрос в службу качества")
         t.text = (NOT_COVERED + (" " + note if note else ""))
         t.route = {"to": "служба качества", "email": True, "why": "случай не оговорён"}

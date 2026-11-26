@@ -155,6 +155,11 @@ class DialogTest(unittest.TestCase):
         self.assertTrue(t.route and t.route.get("email"))
         self.assertTrue(t.answers)                                  # правило показываем
 
+    def test_conflict_sends_letter(self):
+        t = run_turn("ДБРЦТ: можно стартовать до договора?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "conflict"}), session={})
+        self.assertEqual(t.outcome, "conflict")
+        self.assertEqual(t.route["why"], "противоречие между пунктами регламента")
+
     def test_vague_offers_topics(self):
         sess = {}
         t = run_turn("а что со сроками?", REG, search_for(WINS), FakeLLM({}, vague=True), session=sess)
