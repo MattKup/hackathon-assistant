@@ -48,7 +48,7 @@
           },
           "deadline": {
             "type": "string",
-            "maxLength": 80
+            "maxLength": 160
           },
           "ref": {
             "type": "string",

@@ -87,6 +87,10 @@ def _has_role(role, text):
     return bool(r and r.search(norm(text)))
 
 
+PERSON = re.compile(r"руковод|менеджер|архитект|директор|специалист|администратор|инженер|аналитик|логист|владел|координатор|"
+                    r"сметчик|юрист|бухгалт|sales|manager|engineer", re.I)
+
+
 def _present(name, text):
     for n in GROUPS.get(name, {name}) | {name}:
         if (_has_abbr(n, text) if n.isupper() or len(n) <= 4 else _has_role(n, text)):
@@ -98,7 +102,8 @@ def foreign_entities(step_text, window_text, question=""):
     """Роли/сокращения, которые модель назвала в шаге, а в пункте (и в вопросе) их нет — с учётом расшифровок
     («РП» = «Руководитель проекта»). v7: «Руководитель отдела УП», «Менеджер по качеству», ТКП вместо КП.
     Длинные названия проверяются первыми и вырезаются, чтобы «Архитектор» не срабатывал внутри «Пресейл-архитектор»."""
-    names = sorted(set(ABBR) | set(ROLES) | {n for g in GROUPS.values() for n in g}, key=len, reverse=True)
+    names = sorted(set(ABBR) | set(ROLES) | {n for g in GROUPS.values() for n in g if n in ABBR or PERSON.search(n)},
+                   key=len, reverse=True)       # длинные названия — только роли людей (не «Заявка на пресейл», v8 q017)
     rest, out = step_text, []
     for n in names:
         short = n.isupper() or len(n) <= 4
@@ -175,6 +180,9 @@ def _ban_applies(summary, ban):
 BAN = re.compile(r"запрещ|не\s+допуска|не\s+может\b|не\s+могут\b|не\s+вправе|нельзя|не\s+разреша", re.I)
 
 
+REPLACEABLE = {"entity_not_in_source", "added_from_question", "number_not_in_source"}
+
+
 def check(raw, windows, question=""):
     q = question.split("\n\n")[0]
     out = {**raw, "steps": [], "rejected": []}
@@ -203,6 +211,13 @@ def check(raw, windows, question=""):
                     reason = "entity_not_in_source"
                 if not reason and st.get("who") and w.get("kind") != "practice" and foreign_entities(st["who"], w["text"], q):
                     st = {**st, "who": ""}        # роль только в поле «кто» и не из пункта — не показываем
+        if reason in REPLACEABLE and st.get("quote"):
+            # текст шага с добавкой, а цитата дословная → показываем цитату пункта вместо пересказа (судья v8: q012 — ответ
+            # был верным, но шаг с выдуманной ролью отбрасывался целиком и ответ уходил в «нет ответа»)
+            out["rejected"].append({**st, "reason": reason, "replaced_by_quote": True})
+            st = {**st, "text": st["quote"].rstrip(".") + ".", "who": "", "deadline": st.get("deadline", "") if reason != "number_not_in_source" else "",
+                  "replaced": reason}
+            reason = None
         if reason:
             out["rejected"].append({**st, "reason": reason})
         else:
