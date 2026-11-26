@@ -4,12 +4,16 @@
 → список векторов; RerankRequest{query, texts, truncate, raw_scores} → [{index, score}].
 """
 import json
+import threading
 import time
+
+_RERANK_GATE = threading.Semaphore(2)     # реранкер стенда перегружается (429) при параллельных запросах
+_EMBED_GATE = threading.Semaphore(2)
 import urllib.error
 import urllib.request
 
 
-def _post(url, body, timeout=120, retries=3):
+def _post(url, body, timeout=120, retries=6):
     data = json.dumps(body).encode()
     for attempt in range(retries):
         req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
@@ -18,7 +22,7 @@ def _post(url, body, timeout=120, retries=3):
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt + 1 < retries:      # перегрузка — пауза и повтор
-                time.sleep(1.5 * (attempt + 1))
+                time.sleep(0.4 * (2 ** attempt))
                 continue
             raise RuntimeError(f"TEI {url} {e.code}: {e.read()[:300]!r}") from e
 
@@ -32,15 +36,17 @@ class TEI:
     def embed(self, texts):
         out = []
         for i in range(0, len(texts), self.batch):
-            out += _post(self.embed_url + "/embed", {"inputs": texts[i:i + self.batch], "truncate": True, "normalize": True})
+            with _EMBED_GATE:
+                out += _post(self.embed_url + "/embed", {"inputs": texts[i:i + self.batch], "truncate": True, "normalize": True})
         return out
 
     def rerank(self, query, texts, batch=8):
         """Реранкер стенда принимает ≤ 8 текстов за запрос (422 «batch size > 8», 26.11)."""
         scores = [0.0] * len(texts)
         for i in range(0, len(texts), batch):
-            res = _post(self.rerank_url + "/rerank",
-                        {"query": query, "texts": texts[i:i + batch], "truncate": True, "raw_scores": False})
+            with _RERANK_GATE:
+                res = _post(self.rerank_url + "/rerank",
+                            {"query": query, "texts": texts[i:i + batch], "truncate": True, "raw_scores": False})
             for r in res:
                 scores[i + r["index"]] = r["score"]
         return scores

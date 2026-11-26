@@ -18,7 +18,7 @@ class Hybrid:
         self.embed_fn, self.rerank_fn, self.rrf_k = embed_fn, rerank_fn, rrf_k
         self.pos = {w["window_id"]: i for i, w in enumerate(windows)}
 
-    def search(self, query, k=10, pool=40, rerank_n=30, allowed=None, qvec=None, rerank_scores=None):
+    def search(self, query, k=10, pool=40, rerank_n=16, allowed=None, qvec=None, rerank_scores=None):
         """allowed — множество doc_id (фильтр подразделения) применяется ДО ранжирования."""
         trace = {}
         bm = self.bm25.search(query, k=pool, allowed=allowed)
