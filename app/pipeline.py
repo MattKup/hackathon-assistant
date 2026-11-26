@@ -207,7 +207,7 @@ def strip_departments(question, registry=()):
     for pats in dept_aliases(list(registry)).values():
         for pat in pats:
             q = re.sub(pat, " ", q, flags=re.I)
-    return re.sub(r"\s+", " ", re.sub(r"\s*\+\s*", " ", q)).strip() or question
+    return re.sub(r"\s+", " ", re.sub(r"\s*\+\s*", " ", q)).strip(" :;,.—-") or question
 
 
 def route_for(question):
@@ -380,7 +380,8 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     hits = sorted({h["window_id"]: h for h in global_hits + [h for hs in per_doc.values() for h in hs]}.values(),
                   key=lambda h: -h["score"])
     best = hits[0]["score"] if hits else 0
-    tr.append(f"Искал по всей базе ({len(scope)} {plural(len(scope), 'регламент', 'регламента', 'регламентов')}), затем подробно — "
+    tr.append((f"Искал по всей базе ({len(scope)} {plural(len(scope), 'регламент', 'регламента', 'регламентов')})" if whole else
+               f"Искал в документах дирекции ({len(scope)})") + ", затем подробно — "
               f"в {len(deep)} {plural(len(deep), 'документе', 'документах', 'документах')}; {len(queries)} "
               f"{plural(len(queries), 'формулировка', 'формулировки', 'формулировок')}")
 
