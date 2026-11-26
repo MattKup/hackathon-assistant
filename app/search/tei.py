@@ -35,9 +35,12 @@ class TEI:
             out += _post(self.embed_url + "/embed", {"inputs": texts[i:i + self.batch], "truncate": True, "normalize": True})
         return out
 
-    def rerank(self, query, texts):
-        res = _post(self.rerank_url + "/rerank", {"query": query, "texts": texts, "truncate": True, "raw_scores": False})
+    def rerank(self, query, texts, batch=8):
+        """Реранкер стенда принимает ≤ 8 текстов за запрос (422 «batch size > 8», 26.11)."""
         scores = [0.0] * len(texts)
-        for r in res:
-            scores[r["index"]] = r["score"]
+        for i in range(0, len(texts), batch):
+            res = _post(self.rerank_url + "/rerank",
+                        {"query": query, "texts": texts[i:i + batch], "truncate": True, "raw_scores": False})
+            for r in res:
+                scores[i + r["index"]] = r["score"]
         return scores
