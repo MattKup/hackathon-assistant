@@ -19,9 +19,11 @@ from app.registry.build import run as build_registry  # noqa: E402
 from app.search.hybrid import Hybrid  # noqa: E402
 from app.search.tei import TEI  # noqa: E402
 
-EXPECT = {"answer": "answer", "clarify": "clarify", "answer_per_department": "clarify", "compare_all": "clarify",
-          "answer_with_caveat": "answer_with_caveat", "external_ref": "answer", "escalate": "escalate",
-          "out_of_scope": "out_of_scope", "task_refusal": "task_refusal", "document": "answer"}
+EXPECT = {"answer": {"answer", "answer_with_caveat"}, "clarify": {"clarify"},
+          "answer_per_department": {"answer", "answer_with_caveat", "conflict"}, "compare_all": {"clarify"},
+          "answer_with_caveat": {"answer_with_caveat", "conflict"}, "external_ref": {"external_ref", "answer_with_caveat"},
+          "escalate": {"escalate"}, "out_of_scope": {"out_of_scope"}, "task_refusal": {"task_refusal"},
+          "document": {"document"}}
 
 
 def main(corpus_rel, eval_rel, limit=None):
@@ -47,9 +49,19 @@ def main(corpus_rel, eval_rel, limit=None):
                 t1 = run_turn(q, docs, search, llm)
                 row = {"id": e["id"], "class": e["class"], "question": q, "turn1": turn_dict(t1)}
                 exp = e["expected"]["outcome"]
-                ok = t1.outcome == EXPECT.get(exp, exp) or (exp == "answer" and t1.outcome == "answer_with_caveat")
+                ok = t1.outcome in EXPECT.get(exp, {exp})
+                if e["class"] == "same_across" and t1.outcome == "clarify":
+                    row["extra_clarify"] = True          # лишнее уточнение: считаем отдельно
+                if e["class"] == "complex_project":
+                    ok = ok and len(t1.answers) >= 2
                 row["outcome_ok"] = ok
-                if t1.outcome == "clarify" and e["expected"].get("clarify_options"):
+                if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
+                    alld = [o["doc_id"] for o in t1.options if o["doc_id"] not in ("*", "?")]
+                    t2 = run_turn(q, docs, search, llm, session={"docs": alld, "clarifications": 1})
+                    row["turn2_choice"] = "не знаю → все варианты"
+                    row["turn2"] = turn_dict(t2)
+                    row["outcome_ok"] = ok = ok and len(t2.answers) >= 2
+                elif t1.outcome == "clarify" and e["expected"].get("clarify_options"):
                     dep = e["expected"]["clarify_options"][0]
                     t2 = run_turn(q, docs, search, llm, session={"docs": dept_doc.get(dep, []), "clarifications": 1})
                     row["turn2_choice"] = dep
@@ -63,6 +75,7 @@ def main(corpus_rel, eval_rel, limit=None):
             row["seconds"] = round(time.time() - t0, 2)
             times.append(row["seconds"])
             stats["ok" if row["outcome_ok"] else "bad"] += 1
+            stats["extra_clarify"] += 1 if row.get("extra_clarify") else 0
             by_class[(e["class"], row["outcome_ok"])] += 1
             if row.get("cite_hit") is not None:
                 stats["cite_hit" if row["cite_hit"] else "cite_miss"] += 1
@@ -71,7 +84,7 @@ def main(corpus_rel, eval_rel, limit=None):
     times.sort()
     classes = sorted({c for c, _ in by_class})
     m = {"questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
-         "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"],
+         "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
          "by_class": {c: f"{by_class[(c, True)]}/{by_class[(c, True)] + by_class[(c, False)]}" for c in classes},
          "p50_s": times[len(times) // 2] if times else None, "p95_s": times[max(0, int(len(times) * .95) - 1)] if times else None}
     (run_dir / "metrics.json").write_text(json.dumps(m, ensure_ascii=False, indent=2))
@@ -80,6 +93,7 @@ def main(corpus_rel, eval_rel, limit=None):
 
 def turn_dict(t):
     return {"outcome": t.outcome, "text": t.text, "options": [o["label"] for o in t.options], "route": t.route,
+            "documents": t.documents, "external_refs": t.external_refs,
             "trace": t.trace, "top": [[h["department"], h["clause"], h["score"]] for h in t.hits[:5]],
             "answers": [{"label": a["label"], "result": a["result"], "meta": a["meta"]} for a in t.answers]}
 

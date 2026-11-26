@@ -12,11 +12,23 @@ from dataclasses import dataclass, field
 from app.answer.core import answer as llm_answer
 from app.dialog.clarify import decide, label, mentioned
 
-TASK_VERBS = re.compile(r"^\s*(сделай|напиши|составь|подготовь|проанализируй|переведи|сгенерируй|придумай|оформи|"
-                        r"сформулируй|посчитай мне|нарисуй)\b", re.I)
+TASK_VERBS = re.compile(r"^\s*(?:пожалуйста,?\s*)?(сделай|напиши|составь|подготовь|проанализируй|переведи|сгенерируй|придумай|"
+                        r"оформи|сформулируй|посчитай|нарисуй|разбери|собери|открой|запроси|выпиши|отправь|создай|заполни|"
+                        r"сократи|перескажи мне|набросай|проверь мой|исправь)\b|\bза меня\b", re.I)
+FIND_DOC = re.compile(r"(как\w*|в как\w*)\s+(документ|регламент)\w*|где\s+(описан|прописан|найти|лежит|почитать)\w*|"
+                      r"\bкакие\s+(два|документы)\b", re.I)
 OUT_OF_SCOPE = re.compile(r"\b(марж\w*\s+(по|моей|на)\s|преми\w*|бонус\w*|kpi|курс\s+(доллар|евро|валют)\w*|"
                           r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*)", re.I)
 NO_SUPPORT = 0.12          # скор реранкера лучшего окна ниже порога → опоры нет (v1: 0.30 — слишком строго на жаргоне)
+
+
+SCOPE_SYSTEM = ("Ты классифицируешь вопрос сотрудника. База знаний — регламенты проектной деятельности компании: "
+                "пресейл, заявки на расчёт, ТКП/КП, договоры с заказчиком и субподрядчиками, сметы, старт, ведение, "
+                "приёмка и закрытие проектов, роли (АМ, SS, РП, архитектор и т. п.). Ответь JSON: "
+                "in_scope=true, если вопрос о том, как устроены эти процессы в компании (даже если ответа может не быть); "
+                "false — если о другом (личная экономика сделки и мотивация, рынок и конкуренты, законы вообще, бытовое).")
+SCOPE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["in_scope"],
+                "properties": {"in_scope": {"type": "boolean"}}}
 
 
 @dataclass
@@ -28,6 +40,8 @@ class Turn:
     route: dict = None
     trace: list = field(default_factory=list)
     hits: list = field(default_factory=list)
+    documents: list = field(default_factory=list)     # для «где регламент»: [{title, label, sections}]
+    external_refs: list = field(default_factory=list)
 
 
 def route_for(question):
@@ -57,16 +71,37 @@ def run_turn(question, registry, search_fn, llm, session=None):
     best = hits[0]["score"] if hits else 0
     tr.append(f"поиск: {len(hits)} фрагментов, лучший скор {best:.2f}")
     if best < NO_SUPPORT:
+        try:
+            sc, _ = llm.chat_json(SCOPE_SYSTEM, question, SCOPE_SCHEMA, max_tokens=20)
+            in_scope = bool(sc.get("in_scope", True))
+        except Exception:
+            in_scope = True
+        if not in_scope:
+            tr.append("опоры нет, вопрос не про процессы компании → отказ с маршрутом")
+            r = route_for(question)
+            return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
         tr.append("опоры в регламентах нет → письмо в службу качества")
         return Turn("escalate", "В регламентах нет ответа на этот вопрос. Я отправил вопрос в службу качества, вы в копии — ответ придёт на почту.",
                     route={"to": "служба качества", "email": True}, trace=tr, hits=hits)
+    by_id = {x["doc_id"]: x for x in registry}
+    if FIND_DOC.search(question):
+        docs_found = []
+        for h in hits[:6]:
+            if h["doc_id"] not in [d["doc_id"] for d in docs_found]:
+                docs_found.append({"doc_id": h["doc_id"], "title": by_id[h["doc_id"]]["display_title"],
+                                   "label": label(by_id[h["doc_id"]], registry), "sections": []})
+            dd = next(d for d in docs_found if d["doc_id"] == h["doc_id"])
+            sec = f"раздел {h['section']} «{h['section_title']}», п. {h['clause']}"
+            if sec not in dd["sections"]:
+                dd["sections"].append(sec)
+        tr.append(f"тип: где регламент → {len(docs_found)} документ(а)")
+        return Turn("document", "Это описано здесь:", documents=docs_found, trace=tr, hits=hits)
     d = decide(question, hits, registry, session_docs=session.get("docs"))
     tr.append(f"подразделение: {d.reason}")
     if d.action == "clarify" and session.get("clarifications", 0) < 2:
         return Turn("clarify", "Порядок зависит от подразделения. Какое вас интересует?",
                     options=d.options + [{"doc_id": "*", "label": "Несколько (комплексный проект)"},
                                          {"doc_id": "?", "label": "Не знаю"}], trace=tr, hits=hits)
-    by_id = {x["doc_id"]: x for x in registry}
     docs = d.doc_ids or [hits[0]["doc_id"]]
     results = []
     for doc_id in docs:
@@ -79,9 +114,14 @@ def run_turn(question, registry, search_fn, llm, session=None):
         results.append({"doc_id": doc_id, "label": label(doc, registry), "result": res, "meta": meta})
         tr.append(f"ответ {label(doc, registry)}: {res['verdict']}, шагов {len(res['steps'])}, отклонено {len(res['rejected'])}")
     verdicts = [r["result"]["verdict"] for r in results]
+    ext = sorted({ref for h in hits[:5] for ref in h.get("external_refs", [])})
+    if all(v == "no_answer" for v in verdicts) and ext:
+        tr.append("ответ стоит за отсылкой к документу вне базы → называем документ")
+        return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: " + "; ".join(ext),
+                    answers=results, trace=tr, hits=hits, external_refs=ext)
     if all(v == "no_answer" for v in verdicts):
         tr.append("модель не нашла ответа во фрагментах → письмо в службу качества")
         return Turn("escalate", "В регламентах прямого ответа нет. Я отправил вопрос в службу качества, вы в копии.",
                     route={"to": "служба качества", "email": True}, answers=results, trace=tr, hits=hits)
     outcome = "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
-    return Turn(outcome, answers=results, trace=tr, hits=hits)
+    return Turn(outcome, answers=results, trace=tr, hits=hits, external_refs=ext)

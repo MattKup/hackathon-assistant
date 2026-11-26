@@ -58,7 +58,7 @@ def label(doc, registry):
     return name
 
 
-def decide(question, hits, registry, session_docs=None, top=8, ratio=0.6):
+def decide(question, hits, registry, session_docs=None, top=10, ratio=0.35, floor=0.25):
     named = mentioned(question, registry)
     if named:
         return Decision("answer", named, reason="подразделение названо в вопросе")
@@ -69,7 +69,7 @@ def decide(question, hits, registry, session_docs=None, top=8, ratio=0.6):
     best = hits[0]["score"]
     seen = []
     for h in hits[:top]:
-        if h["score"] >= ratio * best and h["doc_id"] not in seen:
+        if h["score"] >= max(floor, ratio * best) and h["doc_id"] not in seen:
             seen.append(h["doc_id"])
     if len(seen) >= 2:
         by_id = {d["doc_id"]: d for d in registry}
