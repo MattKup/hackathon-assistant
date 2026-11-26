@@ -1,0 +1,38 @@
+# Стенд хакатона: ассистент + Mailpit (имитация почты службы качества). Версии зафиксированы.
+# Сеть хоста: ассистенту нужны TEI/LLM/doc-intel стека gfreeze-r на 127.0.0.1; наружу ничего не слушает.
+name: hackathon-app
+services:
+  mailpit:
+    image: axllent/mailpit:v1.33.1          # вышел 07.11.2026
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MP_SMTP_BIND_ADDR: 127.0.0.1:19651
+      MP_UI_BIND_ADDR: 127.0.0.1:19652
+      MP_MAX_MESSAGES: "5000"
+      MP_DATABASE: /data/mailpit.db
+      MP_DISABLE_VERSION_CHECK: "true"      # без исходящих запросов; relay не настроен — письма никуда не уходят
+    volumes:
+      - ../../data/mailpit:/data
+  assistant:
+    image: python:3.12.15-slim-bookworm     # вышел 21.10.2026; код — только stdlib
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    command: ["python3", "-m", "app.api.server", "--corpus", "/corpus", "--data", "/data", "--port", "19650", "--poll", "15"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TEI_EMBED_URL: http://127.0.0.1:19641
+      TEI_RERANK_URL: http://127.0.0.1:19642
+      LLM_BASE_URL: http://127.0.0.1:19643/v1
+      LLM_MODEL: qwen38
+      DOC_INTEL_URL: http://127.0.0.1:19640
+      MAIL_SMTP_HOST: 127.0.0.1
+      MAIL_SMTP_PORT: "19651"
+      MAILPIT_API: http://127.0.0.1:19652
+      QA_EMAIL: quality@example.test        # демо: НЕ реальный адрес службы качества
+    volumes:
+      - ..:/app:ro
+      - ../../corpus:/corpus:ro
+      - ../../data/app:/data
+    depends_on: [mailpit]
