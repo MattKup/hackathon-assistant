@@ -35,7 +35,7 @@ def corpus(extra):
 
 
 def parts(user):
-    m = re.search(r"Пункт A — [^\n]*\n(.*?)\n\nПункт B — [^\n]*\n(.*?)\n\nСравни", user, re.S)
+    m = re.search(r"Пункт A — [^\n]*\n(.*?)\n\nПункт B — [^\n]*\n(.*?)\n\n(?:Сравни|Перепроверь)", user, re.S)
     return m.group(1), m.group(2)
 
 
@@ -48,7 +48,12 @@ class Stub:
     def chat_json(self, system, user, schema, max_tokens=600):
         self.calls += 1
         a, b = parts(user)
+        if system in (C.VERIFY_STRICT, C.VERIFY_ADVOCATE):
+            self.verify_calls = getattr(self, "verify_calls", 0) + 1
+            return self.verifier(a, b, system), {"prompt_tokens": 50, "completion_tokens": 10}
         return self.fn(a, b), {"prompt_tokens": 100, "completion_tokens": 20}
+
+    verifier = staticmethod(lambda a, b, system: {"reason": "", "kind": "none"})
 
 
 def first_sentence(t):
@@ -158,6 +163,44 @@ class ConflictsTest(unittest.TestCase):
             md = (Path(d) / "conflicts.md").read_text()
             self.assertIn("п. 5.2", md)
             self.assertTrue((Path(d) / "conflicts.json").exists())
+
+
+class NightModeTest(unittest.TestCase):
+    def test_review_keeps_confirmed_and_moves_rejected(self):
+        ws = corpus([win("tech", "5.2", SMETA_3), win("tech", "9.4", SMETA_5),
+                     win("tech", "6.1", "После подписания договора РП создаёт Смету в учётной системе в течение 2 рабочих дней."),
+                     win("tech", "6.2", "После подписания договора РП создаёт Смету в учётной системе в течение 7 рабочих дней.")])
+        llm = Stub(deadline_judge)
+        # перепроверка подтверждает только пару 5.2 ↔ 9.4; адвокат её не защитил
+        llm.verifier = lambda a, b, system: {"reason": "сроки разные", "kind": "contradiction", "defense": "", "defense_from_text": False} \
+            if {"3 рабочих", "5 рабочих"} <= {x for x in ("3 рабочих", "5 рабочих") if x in a + b} else {"reason": "совместимы", "kind": "none", "defense": "совместимы", "defense_from_text": True}
+        rep = C.analyze(ws, DOCS, llm, budget=1, workers=1, log=lambda *_: None, night=True)
+        m = rep["metrics"]
+        self.assertTrue(m["night"])
+        self.assertGreater(m["llm_calls"], 1)                      # бюджет ночью не действует
+        self.assertEqual(m["review"]["llm_calls"], 3 * m["review"]["checked"])
+        kept = [f for f in rep["findings"] if f["kind"] == "contradiction"]
+        self.assertEqual([{f["a"]["clause"], f["b"]["clause"]} for f in kept], [{"5.2", "9.4"}])
+        self.assertEqual(kept[0]["confidence"], 1.0)
+        self.assertEqual(len(kept[0]["votes"]), 3)
+        self.assertTrue(rep["review_rejected"])
+        self.assertTrue(all(f["id"].startswith("R") for f in rep["review_rejected"]))
+        md = C.render_md(rep)
+        self.assertIn("Отклонено перепроверкой", md)
+
+    def test_decide_majority(self):
+        V = lambda *ks: [{"kind": k} for k in ks]  # noqa: E731
+        self.assertEqual(C.decide(V("contradiction", "contradiction", "none")), ("contradiction", 0.67))
+        self.assertEqual(C.decide(V("contradiction", "possible", "none")), ("possible", 0.67))
+        self.assertEqual(C.decide(V("possible", "none", "none"))[0], None)
+
+    def test_incremental_only_changed_doc(self):
+        ws = corpus([win("tech", "5.2", SMETA_3), win("tech", "9.4", SMETA_5),
+                     win("dbr", "5.2", SMETA_3), win("dbr", "9.4", SMETA_5)])
+        llm = Stub(deadline_judge)
+        rep = C.analyze(ws, DOCS, llm, workers=1, log=lambda *_: None, changed={"dbr"})
+        self.assertTrue(rep["judged"])
+        self.assertTrue(all("dbr" in (j["a"]["doc_id"], j["b"]["doc_id"]) for j in rep["judged"]))
 
 
 if __name__ == "__main__":
