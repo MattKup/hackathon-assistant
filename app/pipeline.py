@@ -95,7 +95,8 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
 
     # 1. понять вопрос (агентный шаг)
     u, _ = understand(llm, question)
-    queries = [strip_departments(x) for x in u["queries"]]
+    # исходная формулировка всегда в поиске: переписывание может увести в сторону (26.11: «заявка» → «РТЗ»)
+    queries = list(dict.fromkeys([strip_departments(question)] + [strip_departments(x) for x in u["queries"]]))[:4]
     tr.append("разбор вопроса: " + " | ".join(queries))
     named = mentioned(question, registry) or _docs_for(set(u.get("departments") or []), u.get("stage", ""), registry)
     if named:
