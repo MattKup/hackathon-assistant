@@ -5,3 +5,9 @@ data/
 __pycache__/
 .venv/
 .DS_Store
+runs/
+recordings/
+inbox/
+corpus/
+node_modules/
+ui/dist/
