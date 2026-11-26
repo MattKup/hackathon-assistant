@@ -95,3 +95,10 @@ class HeadingsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreambleLabelTest(unittest.TestCase):
+    def test_clause_zero_not_shown_as_p0(self):
+        from app.chunking.clauses import ref_label
+        self.assertEqual(ref_label({"clause": "0", "section_title": "Общие положения"}), "вводная часть «Общие положения»")
+        self.assertEqual(ref_label({"clause": "4.2"}), "п. 4.2")

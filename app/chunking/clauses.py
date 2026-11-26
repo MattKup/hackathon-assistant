@@ -52,6 +52,9 @@ def ref_label(w):
     get = w.get if isinstance(w, dict) else lambda k, d=None: getattr(w, k, d)
     if get("kind") == "heading_section" and get("label"):
         return get("label")
+    if str(get("clause") or "0") == "0":     # текст до первого пункта (определения, преамбула) — без «п. 0»
+        st = get("section_title") or ""
+        return f"вводная часть «{st[:60]}»" if st else "вводная часть документа"
     return f"п. {get('clause')}"
 
 

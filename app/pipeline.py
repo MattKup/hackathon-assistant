@@ -707,7 +707,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                 docs_found.append({"doc_id": h["doc_id"], "title": by_id[h["doc_id"]]["display_title"],
                                    "label": label(by_id[h["doc_id"]], registry), "sections": []})
             dd = next((d for d in docs_found if d["doc_id"] == h["doc_id"]), None)
-            sec = ref_label(h) if h.get("kind") == "heading_section" else f"раздел {h['section']} «{h['section_title']}», п. {h['clause']}"
+            sec = ref_label(h) if h.get("kind") == "heading_section" or str(h.get("clause")) == "0" else f"раздел {h['section']} «{h['section_title']}», п. {h['clause']}"
             if dd and sec not in dd["sections"]:
                 dd["sections"].append(sec)
         tr.append(f"Вопрос о том, где описано, — нашёл {len(docs_found)} {plural(len(docs_found), 'документ', 'документа', 'документов')}")
