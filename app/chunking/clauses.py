@@ -145,6 +145,8 @@ def build_sections(doc, paras, mode):
             groups.append((path, []))
         groups[-1][1].append(p)
     windows, top_no, last_top = [], 0, None
+    norm_t = doc["title"].strip().lower()
+    groups = [([x for i, x in enumerate(pth) if not (i == 0 and x.strip().lower() == norm_t)], ps) for pth, ps in groups]
     for gi, (path, ps) in enumerate(groups):
         if not ps:
             continue

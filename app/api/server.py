@@ -64,6 +64,7 @@ class MockLLM:
 class App:
     def __init__(self, corpus, data, mock=False):
         data.mkdir(parents=True, exist_ok=True)
+        self.data = data
         self.registry, wins = build_registry(Path(corpus), data / "index")
         self.windows = [w.to_dict() for w in wins]
         self.store = Store(str(data / "app.sqlite"))
@@ -149,6 +150,26 @@ class App:
             self.windows = [w for w in self.windows if w["doc_id"] != doc_id]
         self.uploads.remove(doc_id)
         self.rebuild()
+
+    def confluence_sync(self, space=None):
+        """Синхронизация пространств Confluence (config/documents.json «confluence_spaces»: ключ → подразделение, стадия).
+        Адрес и учётная запись — переменные окружения CONFLUENCE_URL, CONFLUENCE_EMAIL (для Cloud), токен — файл
+        CONFLUENCE_TOKEN_FILE; токен в лог и ответ не попадает."""
+        from app.config import cfg
+        from app.connectors.confluence import Confluence, sync
+        url, tf = os.environ.get("CONFLUENCE_URL", ""), os.environ.get("CONFLUENCE_TOKEN_FILE", "")
+        if not url or not tf or not Path(tf).exists():
+            return {"error": "Confluence не настроен: CONFLUENCE_URL и CONFLUENCE_TOKEN_FILE"}
+        conn = Confluence(url, Path(tf).read_text().strip(), os.environ.get("CONFLUENCE_EMAIL", ""))
+        spaces = cfg().get("confluence_spaces") or {}
+        out = {}
+        for key, m in spaces.items():
+            if space and key != space:
+                continue
+            out[key] = sync(conn, key, m.get("department", "OTHER"), m.get("stage", "full_cycle"),
+                            lambda n, d, dep, st: self.upload(n, d, dep, st)[0], self.remove_upload,
+                            str(self.data / "confluence.sqlite"))
+        return out
 
     def cache_stats(self):
         pc = None if self.mock else self.llm.prefix_cache()
@@ -380,6 +401,8 @@ def make_handler(app):
                     case = app.store.case(b["case_id"])
                     mail.reply(case, b.get("from", app.qa_address), b["text"], *app.smtp)
                     return self._json(200, {"ok": True})
+                if self.path == "/api/connectors/confluence/sync":
+                    return self._json(200, app.confluence_sync(b.get("space")))
                 if self.path == "/api/qa/poll":
                     return self._json(200, {"events": app.poll_mail()})
                 if self.path == "/api/qa/approve":        # эксперт подтверждает/правит карточку знания

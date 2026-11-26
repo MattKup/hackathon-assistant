@@ -19,7 +19,7 @@ from app.parsers.docx_simple import Para, parse as parse_docx
 SCHEMA = """create table if not exists uploads(
   doc_id text primary key, created real, file_name text, department text, stage text, status text,
   parser text, pages integer, ocr_pages integer, blocks integer, windows integer, chars integer, error text, job_id text)"""
-EXT_OK = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+EXT_OK = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".html", ".htm"}
 
 
 def parse_multipart(content_type, body):
@@ -95,7 +95,7 @@ class Uploads:
             return sha, False
         (self.folder / f"{sha}{ext}").write_bytes(data)
         self.db.execute("insert into uploads(doc_id, created, file_name, department, stage, status, parser) values(?,?,?,?,?,?,?)",
-                        (sha, time.time(), file_name, department, stage, "processing", "docx_simple" if ext == ".docx" else "doc-intel"))
+                        (sha, time.time(), file_name, department, stage, "processing", "docx_simple" if ext == ".docx" else ("html_simple" if ext in (".html", ".htm") else "doc-intel")))
         self.db.commit()
         return sha, True
 
@@ -106,6 +106,9 @@ class Uploads:
         try:
             if path.suffix.lower() == ".docx":
                 paras, pages, ocr = parse_docx(path), 1, 0
+            elif path.suffix.lower() in (".html", ".htm"):           # страница Confluence / выгрузка wiki
+                from app.parsers.html_simple import parse_html
+                paras, pages, ocr = parse_html(path.read_text(errors="replace")), 1, 0
             else:
                 ir, job = self._docintel(path, doc_id)
                 paras = ir_to_paras(ir)
