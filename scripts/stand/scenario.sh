@@ -3,7 +3,7 @@
 # Кейс 1 (нет опоры → письмо), кейс 3 (ответ эксперта → практика → повторный вопрос), кейс 2 (уточнение).
 set -euo pipefail
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 pistonvlm"
-api(){ printf '%s' "$2" | $SSH "curl -fsS --max-time 90 -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:19650$1"; }
+api(){ local b64; b64=$(printf '%s' "$2" | base64 | tr -d '\n'); $SSH "echo $b64 | base64 -d | curl -sS --max-time 90 -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:19650$1"; }
 get(){ $SSH "curl -fsS --max-time 30 http://127.0.0.1:19650$1"; }
 out="$RUN_DIR/scenario.jsonl"; : > "$out"
 step(){ echo "== $1"; echo "{\"step\":\"$1\",\"resp\":$2}" >> "$out"; echo "$2" | python3 -c "import json,sys; r=json.load(sys.stdin); print({k:r.get(k) for k in ('outcome','text','case','seconds')}); [print('  ',a['label'],a['verdict'],a['summary'][:200]) for a in r.get('answers',[])]" 2>/dev/null || echo "$2" | head -c 400; echo; }
