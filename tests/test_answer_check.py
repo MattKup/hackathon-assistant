@@ -153,3 +153,10 @@ class DocAbbrTest(unittest.TestCase):
         self.assertIn("продаже решений", a["SS"])
         self.assertEqual(a["РП"], "Руководителя проекта")
         self.assertNotIn("РТЗ", a)
+
+
+class FiredPairsTest(unittest.TestCase):
+    def test_colloquial_pairs(self):
+        from app.answer.core import fired_pairs
+        self.assertTrue(any("офер" in x for x in fired_pairs("Кто относит офер клиенту?")))
+        self.assertEqual(fired_pairs("Кто назначает руководителя проекта?"), [])

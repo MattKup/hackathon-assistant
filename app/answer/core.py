@@ -156,6 +156,25 @@ def _colloquial_map():
     return out
 
 
+def fired_pairs(question):
+    """Г13 (исследование, рек. 3; Golden-Retriever): сработавшие для вопроса пары словаря «слово сотрудника → термин
+    регламента» — подсказка модели ответа для сопоставления (не факт; расшифровки в ответе — только из текста)."""
+    q = question.lower().replace("ё", "е")
+    out = []
+    try:
+        syn = json.loads((ROOT / "config" / "synonyms.json").read_text())
+    except (OSError, ValueError):
+        return out
+    for k, v in (syn.get("colloquial") or {}).items():
+        term = v.get("term") if isinstance(v, dict) else v
+        for var in [x.strip().lower().replace("ё", "е") for x in k.split(",") if x.strip()]:
+            base = var[:-1] if len(var) >= 4 and var[-1] in "аеиоуыяюь" else var     # «сабы» → «саб»: падежи
+            if re.search(rf"(?<![\wа-я]){re.escape(base)}", q):
+                out.append(f"«{var}» → {term}")
+                break
+    return out
+
+
 def _term_in(term, text):
     abbr = re.findall(r"\b[A-ZА-ЯЁ]{2,}\b", term)
     return bool(stems(term) & stems(text)) or any(_has_abbr(a, text) for a in abbr)

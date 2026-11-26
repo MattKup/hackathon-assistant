@@ -623,6 +623,11 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     queries = list(dict.fromkeys([strip_departments(question, registry)] + [strip_departments(x, registry) for x in u["queries"]]))[:4]
     tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
     terms = "" if "G3" in OFF else "; ".join(queries[1:])
+    if "G13" in ON:                                  # Г13: сработавшие пары словаря «слово → термин регламента»
+        from app.answer.core import fired_pairs
+        fp = fired_pairs(question)
+        if fp:
+            terms = ((terms + "; ") if terms else "") + "в вопросе " + ", ".join(fp)
     # Г2: сотрудник сам пишет, что не знает подразделение → не переспрашивать, ответы по всем (на этот ход)
     if u.get("dept_unknown") and "G2" not in OFF and not session.get("no_clarify") and not mentioned(question, registry) \
             and not u.get("departments"):
@@ -787,7 +792,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         ws = fit_tokens(llm, q, ws, names.get(dep, dep))
         from app.answer.core import stems as _st
         wst = _st(" ".join(w["text"] for w in ws))
-        t_dep = "; ".join(x for x in terms.split("; ") if x and _st(x) and len(_st(x) & wst) * 2 >= len(_st(x))) if terms else ""
+        t_dep = "; ".join(x for x in terms.split("; ") if x and (x.startswith("в вопросе ") or (_st(x) and len(_st(x) & wst) * 2 >= len(_st(x))))) if terms else ""
         try:
             res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache, t_dep)
         except Exception as e:             # сбой по одной дирекции не роняет весь ход (ревью Fable К12)
