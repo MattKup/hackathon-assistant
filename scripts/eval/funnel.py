@@ -120,6 +120,16 @@ def by(rows, key):
     return {k: f"{sum(bool(ok(x)) for x in v)}/{len(v)}" for k, v in sorted(d.items())}
 
 
+def mcnemar(b, c):
+    """Точный двусторонний тест McNemar: вероятность получить такой или больший перекос b/c случайно."""
+    from math import comb
+    n = b + c
+    if not n:
+        return 1.0
+    k = min(b, c)
+    return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
@@ -150,6 +160,16 @@ def main():
         L += ["", f"## {title} (судья, если есть, иначе исход)", "", "| | " + " | ".join(n for n, _ in res) + " |",
               "|---|" + "---|" * len(res)]
         L += [f"| {k} | " + " | ".join(p.get(k, "—") for p in parts) + " |" for k in ks]
+    if len(res) >= 2:                      # парное сравнение с первым прогоном (McNemar, точный двусторонний)
+        L += ["", "## Сравнение с первым прогоном (те же вопросы; McNemar)", "", "| Прогон | стало верно | стало неверно | p |", "|---|---|---|---|"]
+        okf = lambda x: x["judge"] if x["judge"] is not None else x["ok"]   # noqa: E731
+        base = {x["id"]: bool(okf(x)) for x in res[0][1]}
+        for n, rows2 in res[1:]:
+            cur = {x["id"]: bool(okf(x)) for x in rows2}
+            ids = base.keys() & cur.keys()
+            b = sum(1 for i in ids if cur[i] and not base[i])
+            c = sum(1 for i in ids if base[i] and not cur[i])
+            L.append(f"| {n} | {b} | {c} | {mcnemar(b, c):.3f} |")
     name, rows = res[-1]
     L += ["", f"## Ошибки последнего прогона ({name}) по причине", ""]
     for why in Counter(x["why"] for x in rows if x.get("why")):
