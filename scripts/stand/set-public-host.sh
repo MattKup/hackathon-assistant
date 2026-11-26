@@ -26,12 +26,18 @@ python3 - "$HASH" "$HOST" <<'PY'
 import sys, pathlib
 h, host = sys.argv[1], sys.argv[2]
 t = pathlib.Path("Caddyfile.tpl").read_text().replace("__HASH__", h).replace("__HOST__", host)
-pathlib.Path("Caddyfile").write_text(t)
+pathlib.Path("Caddyfile.new").write_text(t)
 PY
-echo "Caddyfile для $HOST готов"
+echo "== проверка нового Caddyfile (caddy validate)"
+if docker run --rm -v "$PWD/Caddyfile.new:/etc/caddy/Caddyfile:ro" caddy:2.11.9-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -5; then
+  mv Caddyfile.new Caddyfile; echo "Caddyfile для $HOST принят"
+else
+  echo "НОВЫЙ CADDYFILE НЕ ПРОШЁЛ ПРОВЕРКУ — оставляю прежний"; rm -f Caddyfile.new
+fi
 docker compose -p hackathon-public up -d --force-recreate
 sleep 3
 docker compose -p hackathon-public ps --format '{{.Name}} {{.Image}} {{.Status}}'
+echo "== журнал Caddy (последние строки)"; docker logs --tail 15 hackathon-public-caddy-1 2>&1 | cut -c1-300
 echo "== проверка изнутри (пароль не печатается)"
 echo -n "HTTP без пароля: "; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:80/
 echo -n "HTTP с паролем:  "; curl -s -o /dev/null -w '%{http_code}\n' -u "jury:$(cat secret/password)" http://127.0.0.1:80/api/health
