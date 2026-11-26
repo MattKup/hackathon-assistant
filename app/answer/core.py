@@ -333,9 +333,34 @@ def extract_abbr(windows):
     return {k: c.most_common(1)[0][0] for k, c in cnt.items()}
 
 
+_GLOSS = None
+
+
+def _glossary_abbr():
+    """Глоссарий организаторов (config/synonyms.json abbreviations) — вторая, равноправная форма (владелец 26.11:
+    SS = Solution Sales = Менеджер по продаже решений)."""
+    global _GLOSS
+    if _GLOSS is None:
+        try:
+            _GLOSS = {k.strip(): (v.get("expansions") if isinstance(v, dict) else v) or []
+                      for key, v in (json.loads((ROOT / "config" / "synonyms.json").read_text()).get("abbreviations") or {}).items()
+                      for k in key.split(",") if k.strip()}
+        except (OSError, ValueError):
+            _GLOSS = {}
+    return _GLOSS
+
+
 def abbr_note(windows):
     text = " ".join(w.get("text", "") for w in windows)
-    found = [f"{k} — {v}" for k, v in DOC_ABBR.items() if re.search(rf"(?<![\wА-Яа-яЁё]){re.escape(k)}(?![\wА-Яа-яЁё])", text)]
+    g = _glossary_abbr()
+    found = []
+    for k in sorted(set(DOC_ABBR) | set(g)):
+        if not re.search(rf"(?<![\wА-Яа-яЁё]){re.escape(k)}(?![\wА-Яа-яЁё])", text):
+            continue
+        forms = [x for x in [DOC_ABBR.get(k)] + list(g.get(k) or [])[:1] if x]
+        forms = list(dict.fromkeys(forms))
+        if forms:
+            found.append(f"{k} — {forms[0]}" + (f" ({forms[1]})" if len(forms) > 1 else ""))
     return ("\nСокращения в этих фрагментах (расшифровки из текста документов): " + "; ".join(found[:20])) if found else ""
 
 
