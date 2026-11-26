@@ -458,3 +458,37 @@ class PracticePriorityTest(unittest.TestCase):
         res2 = {"verdict": "answer", "steps": [{"doc_id": "dbr", "clause": "1.5", "doc_title": "Регламент ДБРЦТ"}]}
         out = apply_conflicts([{"label": "ДБРЦТ", "result": res2}], conf, [], "за сколько подавать заявку сроки разные")
         self.assertEqual(out[0]["result"]["verdict"], "conflict")
+
+
+class DispatcherTest(unittest.TestCase):
+    """Г9: диспетчер решения — «по дирекциям раздельно» без вопроса; одно уточнение на вопрос."""
+    class DLLM(FakeLLM):
+        def __init__(self, decision, *a, **kw):
+            super().__init__(*a, **kw)
+            self.decision = decision
+
+        def chat_json(self, system, user, schema, max_tokens=1500, **kw):
+            if "Ты решаешь, как ответить" in system:
+                return {"decision": self.decision, "reason": "тест"}, {}
+            return super().chat_json(system, user, schema, max_tokens)
+
+    def run_on(self, decision):
+        import app.pipeline as pl
+        pl.ON.add("G9")
+        try:
+            return run_turn("За сколько подавать заявку на расчёт?", REG, search_for(WINS),
+                            self.DLLM(decision, {"Техническая дирекция": "answer", "ДБРЦТ": "answer"}), session={})
+        finally:
+            pl.ON.discard("G9")
+
+    def test_per_department_no_question(self):
+        t = self.run_on("per_department")
+        self.assertNotEqual(t.outcome, "clarify")
+        self.assertEqual(len(t.answers), 2)
+
+    def test_clarify_department(self):
+        self.assertEqual(self.run_on("clarify_department").outcome, "clarify")
+
+    def test_same(self):
+        t = self.run_on("same")
+        self.assertIn("одинаков", t.text)

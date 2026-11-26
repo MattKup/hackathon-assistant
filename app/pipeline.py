@@ -44,6 +44,7 @@ DOC_WORDS = re.compile(r"документ|регламент|раздел|пун
 DOC_RATIO = 0.25           # «где описано»: документ называем, если его пункт не слабее четверти лучшего (q208 — 0,08; q206 — второй документ ИБ)
 import os as _os
 OFF = set(filter(None, _os.environ.get("HK_OFF", "").split(",")))   # выключить гипотезы для замера: HK_OFF=G1,G3
+ON = set(filter(None, _os.environ.get("HK_ON", "").split(",")))     # включить экспериментальные: HK_ON=G8,G9,G10,G11
 OOS_SUPPORT = 0.5          # «вне регламентов» по разбору вопроса — только если в регламентах нет сильной опоры
 NO_SUPPORT = 0.05          # ниже — опоры нет (v1: 0.30, v2: 0.12 — терялись верные ответы; дальше решает verdict модели)
 
@@ -84,7 +85,7 @@ COMPLEX_NOTE = ("\n\n(Это комплексный проект несколь�
 class Counted:
     """Считает вызовы и токены модели за ход (расчёт экономики — по ценам провайдера, решение организаторов 26.11)."""
 
-    STEPS = (("готовишь поиск", "Разбор вопроса"), ("классифицируешь", "Проверка темы"), ("Сравни ответы", "Сравнение дирекций"),
+    STEPS = (("готовишь поиск", "Разбор вопроса"), ("классифицируешь", "Проверка темы"), ("Сравни ответы", "Сравнение дирекций"), ("Ты решаешь, как ответить", "Диспетчер решения"),
              ("помощник сотрудников компании по внутренним регламентам", "Ответ по дирекции"))
 
     def __init__(self, llm):
@@ -180,6 +181,37 @@ SAME_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["sa
                "properties": {"same": {"type": "boolean"}, "difference": {"type": "string", "maxLength": 200}}}
 
 
+DISPATCH_SYSTEM = (
+    "Ты решаешь, как ответить сотруднику, когда по его вопросу готовы ответы нескольких дирекций по их регламентам. "
+    "Выбери одно: same — по сути вопроса ответы одинаковы (та же роль, срок, решение, условие; лишние детали одной дирекции — "
+    "не различие) → один ответ для всех; per_department — ответы различаются, но в вопросе названы дирекции или сказано, что проект "
+    "совместный/комплексный, либо сотрудник пишет, что не знает дирекцию, → показать ответы по дирекциям раздельно, без вопроса; "
+    "clarify_department — ответы различаются по сути, дирекция не названа и не сказано, что сотрудник её не знает → спросить дирекцию. "
+    "При сомнении между same и clarify_department выбирай per_department: ответ по всем лучше лишнего вопроса. reason — коротко.")
+DISPATCH_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["decision", "reason"],
+                   "properties": {"decision": {"enum": ["same", "per_department", "clarify_department"]},
+                                  "reason": {"type": "string", "maxLength": 200}}}
+DISPATCH_RU = {"same": "ответ одинаков во всех дирекциях", "per_department": "ответы по дирекциям раздельно",
+               "clarify_department": "уточнить дирекцию"}
+
+
+def dispatch(llm, question, answered, u=None):
+    """Г9 (исследование, рек. 6; разбор лишних уточнений v2): решение «один ответ / по дирекциям / уточнить» — моделью
+    по готовым ответам, вместо правил и сравнения «одинаково ли». Сбой — прежнее правило (уточнить)."""
+    blocks = []
+    for r in answered:
+        res = r["result"]
+        steps = "; ".join(f"{st.get('text', '')} ({st.get('who', '')} {st.get('deadline', '')})".strip() for st in res.get("steps", []))
+        blocks.append(f"{r['label']}: {res.get('summary', '')} Шаги: {steps} Оговорка: {res.get('caveat', '')}")
+    named = ", ".join((u or {}).get("departments") or []) or "не названы"
+    try:
+        js, _ = llm.chat_json(DISPATCH_SYSTEM, f"Вопрос сотрудника: {question}\nДирекции, названные в вопросе (разбор): {named}\n\n"
+                              + "\n\n".join(blocks), DISPATCH_SCHEMA, max_tokens=150)
+        return js.get("decision", "clarify_department"), js.get("reason", "")
+    except Exception:
+        return "clarify_department", "сбой диспетчера — уточняю"
+
+
 def answers_same(llm, question, answered):
     """Разбор v4 п. 1b, судья v7: в 10 вопросах «одинаково во всех дирекциях» ассистент зря спрашивал дирекцию."""
     blocks = []
@@ -264,7 +296,14 @@ def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index,
     extra = [{**base, **w, "doc_title": w.get("doc_title") or base.get("doc_title", "")} for w in extra]
     ws2 = budget(sorted(ws + extra, key=lambda w: -w.get("score", 0)), max_windows=PER_DEPT + 6)
     ws2 = fit_tokens(llm, question, ws2, label_)
-    res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache, terms)
+    hint = terms
+    if "G8" in ON and res.get("verdict") == "no_answer" and ws:
+        # Г8 (исследование, рек. 4): отказ при сильной опоре — подсказать модели вероятный пункт (не факт: проверки кодом остаются)
+        top = max(ws, key=lambda w: w.get("score", 0))
+        hint = ((terms + "; ") if terms else "") + (f"по оценке поиска на вопрос, вероятно, отвечает {ref_label(top)}; сопоставь слова "
+                                                    "вопроса с его терминами — если он отвечает по смыслу, это ответ, иначе no_answer")
+    think = "G10" in ON and res.get("verdict") == "no_answer"   # Г10: рассуждение — только для отказов
+    res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache, hint, think)
     better = (VERDICT_RANK.get(res2["verdict"], 0), len(res2.get("steps", []))) > (VERDICT_RANK.get(res["verdict"], 0), len(res.get("steps", [])))
     return {"res": res2, "meta": meta2, "ws": ws2, "better": better, "added": len(extra), "why": why}
 
@@ -387,14 +426,15 @@ def fit_tokens(llm, q, ws, label_):
     return ws
 
 
-def cached_answer(llm, q, ws, label_, cache, terms=""):
+def cached_answer(llm, q, ws, label_, cache, terms="", thinking=False):
+    thinking = thinking or "G11" in ON           # Г11: рассуждение во всех ответах (замер «думающей» модели)
     if cache is None:
-        return llm_answer(llm, q, ws, label_, terms)
-    k = cache.key("answer", norm_q(q), label_, tuple(w["window_id"] for w in ws), terms)
+        return llm_answer(llm, q, ws, label_, terms, thinking)
+    k = cache.key("answer", norm_q(q), label_, tuple(w["window_id"] for w in ws), terms, thinking)
     hit = cache.get(k)
     if hit is not None:
         return hit[0], {**hit[1], "from_cache": True}
-    res, meta = llm_answer(llm, q, ws, label_, terms)
+    res, meta = llm_answer(llm, q, ws, label_, terms, thinking)
     cache.put(k, (res, meta))
     return res, meta
 
@@ -469,7 +509,8 @@ def _final(results, note, tr, hits, session, question, complex_=False):
     правило есть, а случай не оговорён → ответ с оговоркой + автоматическое письмо в службу качества (кейс 1)."""
     results = apply_conflicts(results, session.get("_conflicts"), tr, question)
     shown = [r for r in results if r["result"]["verdict"] != "no_answer"]
-    if len(shown) == 1 and not session.get("no_clarify") and not any(r["result"]["verdict"] == "conflict" for r in shown) and session.get("clarifications", 0) < 2:
+    max_cl = 1 if "G9" in ON else 2               # Г9: одно уточнение на вопрос; после выбора дирекции — ответ с условиями
+    if len(shown) == 1 and not session.get("no_clarify") and not any(r["result"]["verdict"] == "conflict" for r in shown) and session.get("clarifications", 0) < max_cl:
         r = shown[0]
         opts = grounded_options(r["result"].get("ask_options") or [], r.get("windows") or [], r["result"].get("steps") or [])
         if r["result"].get("ask", "").strip() and len(opts) >= 2:
@@ -788,8 +829,16 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     silent = [r["label"] for r in results if r["result"]["verdict"] == "no_answer"]   # только проверенные дирекции
     note = ("В регламентах " + (", ".join(silent[:-1]) + " и " + silent[-1] if len(silent) > 1 else silent[0])
             + " об этом не сказано.") if answered and silent else ""
+    if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2 and "G9" in ON:
+        d, why = dispatch(llm, question, answered, u)
+        tr.append(f"Диспетчер решения: {DISPATCH_RU.get(d, d)} — {why}")
+        if d == "same":
+            return _finish(answered, ("Порядок одинаков во всех дирекциях, где он описан. " + note).strip())
+        if d == "per_department":
+            complex_ = True
+            return _finish(answered, note)
     if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
-        same, diff = answers_same(llm, question, answered)
+        same, diff = (False, "") if "G9" in ON else answers_same(llm, question, answered)
         if same:
             tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и по сути одинаков — уточнять не нужно")
             return _finish(answered, ("Порядок одинаков во всех дирекциях, где он описан. " + note).strip())

@@ -45,17 +45,18 @@ class LLM:
                         pass
         return out
 
-    def chat_json(self, system, user, schema, max_tokens=1500):
-        body = {"model": self.model, "temperature": 0, "max_tokens": max_tokens,
+    def chat_json(self, system, user, schema, max_tokens=1500, thinking=False):
+        """thinking=True — режим рассуждения Qwen (Г10/Г11, 26.11): длиннее вывод и таймаут; ответ — JSON после </think>."""
+        body = {"model": self.model, "temperature": 0, "max_tokens": max_tokens + (6000 if thinking else 0),
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}},
-                "chat_template_kwargs": {"enable_thinking": False}}
+                "chat_template_kwargs": {"enable_thinking": bool(thinking)}}
         t0 = time.time()
         for attempt in (1, 2):                 # один повтор при сетевом сбое, таймауте или 5xx (ревью Fable К12)
             req = urllib.request.Request(self.url, data=json.dumps(body).encode(), method="POST",
                                          headers={"Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                with urllib.request.urlopen(req, timeout=self.timeout * (3 if thinking else 1)) as r:
                     js = json.loads(r.read())
                 break
             except urllib.error.HTTPError as e:
@@ -71,4 +72,8 @@ class LLM:
         usage = js.get("usage", {})
         meta = {"seconds": round(time.time() - t0, 3), "finish": ch.get("finish_reason"),
                 "prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens")}
-        return json.loads(ch["message"]["content"]), meta
+        content = ch["message"].get("content") or ""
+        if "</think>" in content:
+            content = content.split("</think>", 1)[1]
+        meta["thinking"] = bool(thinking)
+        return json.loads(content.strip()), meta

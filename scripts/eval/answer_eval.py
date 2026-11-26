@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 for _a in sys.argv:
     if _a.startswith("--off="):
         os.environ["HK_OFF"] = _a[6:]
+    if _a.startswith("--on="):
+        os.environ["HK_ON"] = _a[5:]
 
 from app.answer.llm import LLM  # noqa: E402
 from app.pipeline import build_index, load_conflicts, run_turn  # noqa: E402
@@ -209,7 +211,7 @@ def main(corpus_rel, eval_rel, *rest):
     m = {"vllm_prefix_cache": ({"queries": pc1["queries"] - pc0["queries"], "hits": pc1["hits"] - pc0["hits"],
                                 "hit_rate": round((pc1["hits"] - pc0["hits"]) / max(1, pc1["queries"] - pc0["queries"]), 3)}
                                if pc0 and pc1 else None),
-         "mode": "no_clarify" if no_clarify else "clarify", "oracle": oracle, "off": os.environ.get("HK_OFF", ""), "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
+         "mode": "no_clarify" if no_clarify else "clarify", "oracle": oracle, "off": os.environ.get("HK_OFF", ""), "on": os.environ.get("HK_ON", ""), "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
          "asked": stats["asked"], "deep_passes": stats["deep"], "deep_better": stats["deep_better"], "auto_mail_not_covered": stats["auto_mail"],
          "tokens_total": {k[4:]: stats[k] for k in stats if k.startswith("tok_")},

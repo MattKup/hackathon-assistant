@@ -274,6 +274,7 @@ def check(raw, windows, question=""):
     return out
 
 
-def answer(llm, question, windows, dept_label, terms=""):
-    raw, meta = llm.chat_json(SYSTEM, build_user(question, windows, dept_label, terms), SCHEMA)
+def answer(llm, question, windows, dept_label, terms="", thinking=False):
+    kw = {"thinking": True} if thinking else {}
+    raw, meta = llm.chat_json(SYSTEM, build_user(question, windows, dept_label, terms), SCHEMA, **kw)
     return check(raw, windows, question), meta
