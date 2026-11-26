@@ -469,7 +469,8 @@ SCHEMA = {"type": "object", "additionalProperties": False,
 
 def _head(w):
     return (f"{w.get('department_name', w['department'])} · «{w.get('doc_title', '')}» "
-            f"({STAGE_RU.get(w['stage'], w['stage'])}) · п. {w['clause']} · раздел «{w.get('section_title', '')}»")
+            f"({STAGE_RU.get(w['stage'], w['stage'])}) · " + (w.get("label") if w.get("kind") == "heading_section" and w.get("label")
+                                                              else f"п. {w['clause']} · раздел «{w.get('section_title', '')}»"))
 
 
 def build_user(wa, wb, rel, sig):
@@ -506,7 +507,8 @@ def _numbers_ok(expl, wa, wb):
     t = CLAUSE_REF.sub(" ", expl)
     for c in (wa["clause"], wb["clause"]):
         t = t.replace(c, " ")
-    have = set(NUM.findall(wa["text"] + " " + wb["text"] + " " + wa["clause"] + " " + wb["clause"]))
+    clauses = " ".join(w["clause"] for w in (wa, wb) if w.get("kind") != "heading_section")   # «§3.2» — не число пункта
+    have = set(NUM.findall(wa["text"] + " " + wb["text"] + " " + clauses))
     return not (set(NUM.findall(t)) - have)
 
 
@@ -710,7 +712,7 @@ def write_outputs(report, out_dir):
 
 
 def _loc(r):
-    return f"{r['department']} · {r['doc_title']} · п. {r['clause']}"
+    return f"{r['department']} · {r['doc_title']} · {r.get('label') or 'п. ' + str(r['clause'])}"
 
 
 def render_md(report):

@@ -37,15 +37,32 @@ def parse_multipart(content_type, body):
 
 
 def ir_to_paras(ir):
-    """IR doc-intel (pages[].blocks[] по readingIndex) → абзацы для нарезки."""
-    out = []
+    """IR doc-intel → абзацы для нарезки.
+
+    С `?sections=true` (контракт DI5) у фрагментов `chunks[]` есть `sectionPath` (путь заголовков от корня,
+    переходит через страницы) и `kind` (block / table / section). Берём block и table — свои окна 600–1000 знаков
+    строит наша нарезка; склейки kind=section (до 4000 знаков) не берём. Канонические фрагменты есть только у страниц,
+    прошедших контроль качества; страницы без фрагментов (на проверке) берём из pages[].blocks с пометкой review.
+    Старый doc-intel без sectionPath → как раньше, по pages[].blocks (type=title — запасной заголовок).
+    """
+    out, covered = [], set()
+    chunks = [c for c in ir.get("chunks") or [] if (c.get("kind") or "block") in ("block", "table") and (c.get("text") or "").strip()]
+    if chunks and any(c.get("sectionPath") for c in chunks):
+        for c in sorted(chunks, key=lambda c: c.get("page", 0)):        # порядок внутри страницы — как отдал doc-intel
+            covered.add(c.get("page"))
+            out.append(Para(len(out), c["text"].strip(), table=c.get("kind") == "table",
+                            section_path=[x for x in (c.get("sectionPath") or []) if x], page=c.get("page", 0)))
     for p in ir.get("pages", []):
+        if p.get("page") in covered:
+            continue
+        review = bool(covered)                                           # есть канонические фрагменты, а этой страницы в них нет
         for b in sorted(p.get("blocks", []), key=lambda b: b.get("readingIndex", 0)):
             t = (b.get("text") or "").strip()
             if not t:
                 continue
             kind = (b.get("type") or "").lower()
-            out.append(Para(len(out), t, is_list="list" in kind, bold=kind in ("title", "heading"), table=kind == "table"))
+            out.append(Para(len(out), t, is_list="list" in kind, bold=kind in ("title", "heading"), table=kind == "table",
+                            level=1 if kind in ("title", "heading") else 0, page=p.get("page", 0), review=review))
     return out
 
 
@@ -157,7 +174,7 @@ class Uploads:
         while time.time() - t0 < 1800:
             _, st = self._api("GET", f"/v1/jobs/{job}")
             if st.get("status") == "done":
-                code, ir = self._api("GET", f"/v1/jobs/{job}/result")
+                code, ir = self._api("GET", f"/v1/jobs/{job}/result?sections=true")
                 if code != 200:
                     raise RuntimeError(f"doc-intel result {code}")
                 return ir, job

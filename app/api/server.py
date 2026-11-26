@@ -217,7 +217,7 @@ class App:
             r = a["result"]
             out["answers"].append({"label": a["label"], "verdict": r["verdict"], "summary": r["summary"], "caveat": r.get("caveat", ""),
                                    "missing": r.get("missing", ""), "steps": [
-                                       {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section")}
+                                       {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section", "label")}
                                        | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]],
                                    "conflict_with": [{"clause": c["clause"], "why": c.get("why", ""), "text": c.get("text", "")[:600]}
                                                      for c in r.get("conflict_with", [])],

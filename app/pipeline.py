@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.answer.cache import norm_q
 from app.answer.core import SYSTEM as ANSWER_SYSTEM, answer as llm_answer, build_user
 from app.answer.understand import understand
+from app.chunking.clauses import ref_label
 from app.config import aliases as dept_aliases, dept_ids, domain, titles as dept_titles
 from app.dialog.clarify import label, mentioned
 
@@ -655,7 +656,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                 docs_found.append({"doc_id": h["doc_id"], "title": by_id[h["doc_id"]]["display_title"],
                                    "label": label(by_id[h["doc_id"]], registry), "sections": []})
             dd = next((d for d in docs_found if d["doc_id"] == h["doc_id"]), None)
-            sec = f"раздел {h['section']} «{h['section_title']}», п. {h['clause']}"
+            sec = ref_label(h) if h.get("kind") == "heading_section" else f"раздел {h['section']} «{h['section_title']}», п. {h['clause']}"
             if dd and sec not in dd["sections"]:
                 dd["sections"].append(sec)
         tr.append(f"Вопрос о том, где описано, — нашёл {len(docs_found)} {plural(len(docs_found), 'документ', 'документа', 'документов')}")

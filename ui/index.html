@@ -329,7 +329,7 @@ function render(r){
     if (r.external_refs?.length) h += `<div class="note">Подробный порядок описан в документе, которого нет в базе помощника: ${r.external_refs.map(esc).join("; ")}</div>`;
     const uniq = {}; used.forEach(n => { const s = notes[n-1]; const k = s.practice ? "practice" : s.doc_title + "|" + s.clause; (uniq[k] ||= {s, ns:[]}).ns.push(n); });
     if (used.length) h += `<div class="lbl">Подтверждено источниками</div><div class="srcs">` + Object.values(uniq).map(({s, ns}) =>
-      `<div class="src" data-n="${ns[0]}"><span>📄</span><div><div class="t">${s.practice ? "Практика службы качества" : esc(s.doc_title)}</div><div class="s">${s.practice ? "подтверждена экспертом" : `п. ${esc(s.clause)}${s.section ? " · " + esc(s.section) : ""}`} · сноски ${ns.join(", ")}</div></div>
+      `<div class="src" data-n="${ns[0]}"><span>📄</span><div><div class="t">${s.practice ? "Практика службы качества" : esc(s.doc_title)}</div><div class="s">${s.practice ? "подтверждена экспертом" : `${esc(s.label || ("п. " + s.clause))}${s.section ? " · " + esc(s.section) : ""}`} · сноски ${ns.join(", ")}</div></div>
        <span class="badge ${s.practice ? "a" : "g"} ml">${s.practice ? "практика" : "действует"}</span></div>`).join("") + `</div>`;
     if (r.case) h += `<div class="note">✉️ ${r.case.sent ? "Вопрос отправлен в службу качества · копия — вам" : "Письмо не отправлено: " + esc(r.case.error || "")}</div>`;
     else if (["answer_with_caveat","conflict"].includes(r.outcome)) h += `<div class="chips"><button class="chip" data-escalate="1">Уточнить у службы качества</button></div>`;
@@ -356,7 +356,7 @@ function showSource(n){
   const text = esc(s.source_text || s.quote), q = esc(s.quote);
   const marked = q && text.includes(q) ? text.replace(q, `<mark>${q}</mark>`) : text;
   $("#srcBody").innerHTML = `<div class="doc">${s.practice ? "Практика службы качества" : esc(s.doc_title)}</div>
-    <div class="path">${s.practice ? "подтверждена экспертом службы качества" : `${esc(DEP[s.department] || "")} · п. ${esc(s.clause)}${s.section ? " · раздел «" + esc(s.section) + "»" : ""}`}</div>
+    <div class="path">${s.practice ? "подтверждена экспертом службы качества" : `${esc(DEP[s.department] || "")} · ${esc(s.label || ("п. " + s.clause))}${s.section ? " · раздел «" + esc(s.section) + "»" : ""}`}</div>
     <div style="margin-bottom:10px"><span class="badge g">${s.practice ? "в базе знаний" : "действует"}</span></div><div class="txt">${marked}</div>`;
 }
 

@@ -7,6 +7,8 @@
 """
 import json
 import re
+
+from app.chunking.clauses import ref_label
 from pathlib import Path
 
 PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
@@ -23,7 +25,8 @@ def norm(s):
 def build_user(question, windows, dept_label):
     parts = []
     for i, w in enumerate(windows, 1):
-        parts.append(f"[w{i}] {w['department_name']} · {w['doc_title']} · п. {w['clause']} · раздел «{w['section_title']}»\n{w['text']}")
+        where = ref_label(w) + ("" if w.get("kind") == "heading_section" else f" · раздел «{w['section_title']}»")
+        parts.append(f"[w{i}] {w['department_name']} · {w['doc_title']} · {where}\n{w['text']}")
     return f"Фрагменты регламентов:\n\n" + "\n\n".join(parts) + f"\n\nПодразделение: {dept_label}\n\nВопрос: {question}"
 
 
@@ -225,7 +228,7 @@ def check(raw, windows, question=""):
             out["steps"].append({**st, "window_id": w["window_id"], "clause": w["clause"],
                                  "department": w["department"], "doc_title": w["doc_title"],
                                  "source_text": w["text"], "section": w.get("section_title", ""),
-                                 "external_refs": w.get("external_refs", [])})
+                                 "external_refs": w.get("external_refs", []), "label": ref_label(w)})
     # числа в кратком ответе и оговорке — только из процитированных пунктов (ревью Fable: q054, q082, q115, q118)
     cited = " ".join(st["source_text"] for st in out["steps"])
     if out["steps"]:
@@ -237,13 +240,13 @@ def check(raw, windows, question=""):
             out["caveat"] = " ".join(x for x in _sentences(out["caveat"]) if not (set(NUM.findall(x)) - src))
     # разрешение в ответе при запрете в процитированном пункте → оговорка с цитатой запрета (судья: q145 «Да, можете…»)
     if out["steps"] and out.get("verdict") == "answer" and PERMIT.search(out.get("summary", "")):
-        bans = [(st["clause"], x) for st in out["steps"] for x in _sentences(st["source_text"]) if BAN.search(x) and _ban_applies(out["summary"], x)]
+        bans = [(st.get("label") or f"п. {st['clause']}", x) for st in out["steps"] for x in _sentences(st["source_text"]) if BAN.search(x) and _ban_applies(out["summary"], x)]
         if bans:
             clause, ban = bans[0]
             out["verdict"] = "answer_with_caveat"
             out["summary_replaced"] = out.get("summary", "")
             # разрешение модели не показываем: сотрудник читает краткий ответ первым (судья v9: q145 «Да, можете…» осталось сверху)
-            out["summary"] = f"Однозначного разрешения в регламенте нет. По п. {clause}: «{ban.strip()[:260]}»"
+            out["summary"] = f"Однозначного разрешения в регламенте нет. По {clause}: «{ban.strip()[:260]}»"
             out["caveat"] = ((out.get("caveat") or "") + " Проверьте, не относится ли этот запрет к вашему случаю; при сомнении — уточните у службы качества.").strip()
             out["permit_vs_ban"] = True
     if raw.get("verdict") in ("answer", "answer_with_caveat", "conflict") and raw.get("steps") and not out["steps"]:
