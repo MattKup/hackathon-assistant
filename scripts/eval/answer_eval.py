@@ -59,11 +59,12 @@ def main(corpus_rel, eval_rel, *rest):
     tei = TEI(os.environ["TEI_EMBED_URL"], os.environ["TEI_RERANK_URL"])
     hy = Hybrid(windows, tei.embed([w["path"] + "\n" + w["text"] for w in windows]), tei.embed, tei.rerank)
     llm = LLM(os.environ["LLM_BASE_URL"], os.environ.get("LLM_MODEL", "qwen38"))
-    search = lambda q, allowed: hy.search(q, k=16, allowed=allowed)[0]  # noqa: E731
+    search = lambda q, allowed, k=16: hy.search(q, k=k, allowed=allowed)[0]  # noqa: E731
     items = [json.loads(l) for l in open(inbox / eval_rel) if l.strip()]
     if limit:
         items = items[: int(limit)]
     stats, times, by_class = Counter(), [], Counter()
+    pc0 = llm.prefix_cache() if hasattr(llm, "prefix_cache") else None
     with open(run_dir / "answers.jsonl", "w") as fh:
         for e in items:
             q = e["question"]
@@ -133,7 +134,11 @@ def main(corpus_rel, eval_rel, *rest):
             print(e["id"], e["class"], row.get("turn1", {}).get("outcome"), row["outcome_ok"], row["seconds"], flush=True)
     times.sort()
     classes = sorted({c for c, _ in by_class})
-    m = {"mode": "no_clarify" if no_clarify else "clarify", "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
+    pc1 = llm.prefix_cache() if pc0 else None
+    m = {"vllm_prefix_cache": ({"queries": pc1["queries"] - pc0["queries"], "hits": pc1["hits"] - pc0["hits"],
+                                "hit_rate": round((pc1["hits"] - pc0["hits"]) / max(1, pc1["queries"] - pc0["queries"]), 3)}
+                               if pc0 and pc1 else None),
+         "mode": "no_clarify" if no_clarify else "clarify", "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
          "asked": stats["asked"], "auto_mail_not_covered": stats["auto_mail"],
          "tokens_total": {k[4:]: stats[k] for k in stats if k.startswith("tok_")},

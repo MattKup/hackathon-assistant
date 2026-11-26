@@ -10,12 +10,10 @@
 import re
 from dataclasses import dataclass, field
 
-# Упоминания подразделений и стадий в вопросе. Ключ — department из config/documents.json.
-DEPT_ALIASES = {
-    "IB": [r"\bиб\b", r"информационн\w* безопасн\w*", r"\bуиб\b", r"дирекци\w* иб"],
-    "DBRCT": [r"\bдбрцт\b", r"\bдбр\b", r"бизнес[- ]решени\w*", r"цифров\w* трансформ\w*"],
-    "TECH": [r"тех\.?\s*дирекц\w*", r"техническ\w* дирекц\w*", r"\bтд\b", r"техдирекц\w*"],
-}
+# Упоминания подразделений — из config/documents.json (department_aliases), новые подразделения — по названию.
+from app.config import aliases as _aliases
+
+DEPT_ALIASES = _aliases([])
 PRESALE = [r"пресейл\w*", r"presale", r"до продажи", r"на этапе продажи"]
 PROJECT = [r"в проекте", r"на проекте", r"реализаци\w* проекта", r"исполнени\w*"]
 
@@ -31,7 +29,7 @@ class Decision:
 def mentioned(question, registry):
     """Документы, которые вопрос явно называет (по подразделению и стадии)."""
     q = question.lower()
-    depts = {d for d, pats in DEPT_ALIASES.items() if any(re.search(p, q) for p in pats)}
+    depts = {d for d, pats in _aliases(registry).items() if any(re.search(p, q) for p in pats)}
     presale = any(re.search(p, q) for p in PRESALE)
     project = any(re.search(p, q) for p in PROJECT)
     if not depts:

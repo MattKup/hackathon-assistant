@@ -11,9 +11,11 @@ from dataclasses import dataclass, field
 
 from concurrent.futures import ThreadPoolExecutor
 
-from app.answer.core import answer as llm_answer
+from app.answer.cache import norm_q
+from app.answer.core import SYSTEM as ANSWER_SYSTEM, answer as llm_answer, build_user
 from app.answer.understand import understand
-from app.dialog.clarify import DEPT_ALIASES, decide, label, mentioned
+from app.config import aliases as dept_aliases, dept_ids, domain, titles as dept_titles
+from app.dialog.clarify import label, mentioned
 
 TASK_VERBS = re.compile(r"^\s*(?:пожалуйста,?\s*)?(сделай|напиши|составь|подготовь|проанализируй|переведи|сгенерируй|придумай|"
                         r"оформи|сформулируй|посчитай|нарисуй|разбери|собери|открой|запроси|выпиши|отправь|создай|заполни|"
@@ -25,23 +27,29 @@ FIND_DOC = re.compile(r"\bв\s+как\w*(\s+[\w-]+){0,3}?\s+(документ|р
                       r"\bкакие\s+(два\s+)?документ\w*(\s+[\w-]+)?\s+(описыва|содерж|отдельно)\w*", re.I)
 OUT_OF_SCOPE = re.compile(r"\b(как\w*\s+марж\w*\s+постав|марж\w*\s+(по|моей|на)\s|преми\w*|бонус\w*|kpi|курс\s+(доллар|евро|валют)\w*|"
                           r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*|постав\w*\s+марж\w*\s+\d|марж\w*\s+\d+\s*%\s+или)", re.I)
-DEPT_NAMES = {"TECH": "Техническая дирекция", "IB": "Дирекция ИБ", "DBRCT": "ДБРЦТ"}
 PER_DOC = 16      # фрагментов на документ после слияния запросов
+GLOBAL_K = 16     # общий поиск по всей базе: фрагментов на формулировку
+MAX_DEPTS = 3     # дирекций, по которым готовим ответ, — не больше (на большой базе)
+DOCS_PER_DEPT = 3 # документов дирекции для подробного поиска — не больше
+CTX_CHARS = 21000 # бюджет контекста на вызов в знаках (решение 24.11, ≈ 6,4 тыс. токенов)
+MAX_CTX_TOKENS, MAX_OUT_TOKENS = 16384, 1500   # vLLM max-model-len и лимит ответа
 PER_DEPT = 18     # фрагментов на дирекцию в контексте модели (документы маленькие, контекст позволяет)
 CLARIFY_FLOOR = 0.15      # документ считается «с опорой», если его лучший скор ≥ max(FLOOR, RATIO × лучший общий)
 CLARIFY_RATIO = 0.3
+OOS_SUPPORT = 0.5          # «вне регламентов» по разбору вопроса — только если в регламентах нет сильной опоры
 NO_SUPPORT = 0.05          # ниже — опоры нет (v1: 0.30, v2: 0.12 — терялись верные ответы; дальше решает verdict модели)
 
 
-SCOPE_SYSTEM = ("Ты классифицируешь вопрос сотрудника. База знаний — регламенты проектной деятельности компании: "
-                "пресейл, заявки на расчёт, ТКП/КП, договоры с заказчиком и субподрядчиками, сметы, старт, ведение, "
-                "приёмка и закрытие проектов, роли (АМ, SS, РП, архитектор и т. п.). Ответь JSON: "
-                "in_scope=true, если вопрос о том, как устроены эти процессы в компании (даже если ответа может не быть); "
-                "Вопросы о правилах, сроках, порогах, санкциях, контактах, ролях и процедурах компании, о проведении проектных "
-                "мероприятий (ретроспектива, приёмка, доступы к сайту проекта, статус сотрудников в проекте) — in_scope, даже если "
-                "ответа в регламентах может не быть. false — только если вопрос о другом: экономика конкретной сделки сотрудника "
-                "(какую маржу поставить, какая будет премия), текущие данные конкретной сделки или проекта (сколько денег осталось "
-                "сейчас, какой статус у моей заявки), рынок и конкуренты, законы вообще, бытовое.")
+def scope_system():
+    return ("Ты классифицируешь вопрос сотрудника. База знаний — " + domain() + ". Ответь JSON: "
+            "in_scope=true, если вопрос о том, как устроены эти процессы в компании (даже если ответа может не быть); "
+            "вопросы о правилах, сроках, порогах, санкциях, контактах, ролях и процедурах компании, о проведении проектных "
+            "мероприятий (ретроспектива, приёмка, доступы, статус сотрудников в проекте) — in_scope, даже если ответа в "
+            "регламентах может не быть. false — только если вопрос о другом: экономика конкретной сделки сотрудника "
+            "(какую маржу поставить, какая будет премия), текущие данные конкретной сделки или проекта (сколько денег осталось "
+            "сейчас, какой статус у моей заявки), рынок и конкуренты, законы вообще, бытовое.")
+
+
 SCOPE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["in_scope"],
                 "properties": {"in_scope": {"type": "boolean"}}}
 
@@ -69,6 +77,9 @@ class Counted:
 
     def __init__(self, llm):
         self.llm, self.t = llm, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+
+    def __getattr__(self, name):          # count_tokens и прочее — к настоящему клиенту
+        return getattr(self.llm, name)
 
     def chat_json(self, *a, **kw):
         res, meta = self.llm.chat_json(*a, **kw)
@@ -120,7 +131,7 @@ def grounded_options(options, windows):
 
 def in_scope_llm(llm, question):
     try:
-        sc, _ = llm.chat_json(SCOPE_SYSTEM, question, SCOPE_SCHEMA, max_tokens=20)
+        sc, _ = llm.chat_json(scope_system(), question, SCOPE_SCHEMA, max_tokens=20)
         return bool(sc.get("in_scope", True))
     except Exception:
         return True
@@ -138,6 +149,51 @@ def cited_refs(results):
     return sorted({ref for r in results for st in r["result"].get("steps", []) for ref in st.get("external_refs", [])})
 
 
+def _search(search_fn, q, allowed, k):
+    try:
+        return search_fn(q, allowed, k)
+    except TypeError:                 # старая сигнатура search_fn(q, allowed)
+        return search_fn(q, allowed)
+
+
+def budget(ws, chars=CTX_CHARS, max_windows=PER_DEPT):
+    """Окна по убыванию скора, пока не исчерпан бюджет в знаках; первое окно берётся всегда."""
+    out, used = [], 0
+    for w in ws:
+        n = len(w.get("text", ""))
+        if out and (used + n > chars or len(out) >= max_windows):
+            continue
+        out.append(w)
+        used += n
+    return out
+
+
+def fit_tokens(llm, q, ws, label_):
+    """Проверка длины перед вызовом (SPEC §6): вход + ответ ≤ max-model-len; не влезает — убираем слабые окна."""
+    count = getattr(llm, "count_tokens", None)
+    if not count:
+        return ws
+    for _ in range(3):
+        n = count(ANSWER_SYSTEM, build_user(q, ws, label_))
+        if n is None or n + MAX_OUT_TOKENS <= MAX_CTX_TOKENS or len(ws) <= 1:
+            return ws
+        keep = max(1, int(len(ws) * (MAX_CTX_TOKENS - MAX_OUT_TOKENS) / n) - 1)
+        ws = ws[:keep]
+    return ws
+
+
+def cached_answer(llm, q, ws, label_, cache):
+    if cache is None:
+        return llm_answer(llm, q, ws, label_)
+    k = cache.key("answer", norm_q(q), label_, tuple(w["window_id"] for w in ws))
+    hit = cache.get(k)
+    if hit is not None:
+        return hit[0], {**hit[1], "from_cache": True}
+    res, meta = llm_answer(llm, q, ws, label_)
+    cache.put(k, (res, meta))
+    return res, meta
+
+
 def plural(n, one, few, many):
     n = abs(n) % 100
     if 11 <= n <= 14:
@@ -145,10 +201,10 @@ def plural(n, one, few, many):
     return one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many
 
 
-def strip_departments(question):
+def strip_departments(question, registry=()):
     """Названия подразделений мешают поиску внутри документа одного подразделения."""
     q = question
-    for pats in DEPT_ALIASES.values():
+    for pats in dept_aliases(list(registry)).values():
         for pat in pats:
             q = re.sub(pat, " ", q, flags=re.I)
     return re.sub(r"\s+", " ", re.sub(r"\s*\+\s*", " ", q)).strip() or question
@@ -173,13 +229,13 @@ def _docs_for(depts, stage, registry):
     return out
 
 
-def run_turn(question, registry, search_fn, llm, session=None, workers=4):
+def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None):
     """search_fn(query, allowed) -> hits (score реранкера).
     session (мутируется): docs, clarifications, no_clarify, complex; cache — ответы по дирекциям до выбора;
     ask — открытый уточняющий вопрос (условие или тема); ask_reply — ответ сотрудника на него."""
     session = {} if session is None else session
     c = Counted(llm)
-    t = _run_turn(question, registry, search_fn, c, session, workers)
+    t = _run_turn(question, registry, search_fn, c, session, workers, answer_cache)
     t.tokens = c.t
     return t
 
@@ -219,16 +275,8 @@ def _final(results, note, tr, hits, session, question, complex_=False):
     return t
 
 
-def _run_turn(question, registry, search_fn, llm, session, workers):
+def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache=None):
     tr = []
-    if TASK_VERBS.search(question):
-        tr.append("Это просьба выполнить работу, а не вопрос по регламентам — отказ")
-        return Turn("task_refusal", "Я отвечаю только на вопросы по регламентам компании. Для таких задач в компании есть другие инструменты.",
-                    route=route_for(question), trace=tr)
-    if OUT_OF_SCOPE.search(question):
-        tr.append("Вопрос не про регламенты — подсказываю, куда обратиться")
-        r = route_for(question)
-        return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr)
 
     by_id = {x["doc_id"]: x for x in registry}
     ask, reply = session.get("ask"), session.pop("ask_reply", None)
@@ -240,7 +288,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
                 return Turn("escalate", "Я отправил вопрос в службу качества, вы в копии — ответ придёт на почту.",
                             route={"to": "служба качества", "email": True}, trace=tr)
             tr.append(f"Сотрудник уточнил тему: {reply}")
-            return _run_turn(f"{question} ({reply})", registry, search_fn, llm, session, workers)
+            return _run_turn(f"{question} ({reply})", registry, search_fn, llm, session, workers, answer_cache)
         base = ask["base"]
         if reply == ASK_DONT_KNOW:
             tr.append("Условие неизвестно — показываю правило со всеми условиями; однозначный ответ дать нельзя")
@@ -268,33 +316,73 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
             return _final(cached, "", tr, hits, session, question, bool(session.get("complex")) or len(cached) > 1)
 
     # 1. понять вопрос (агентный шаг)
-    u, _ = understand(llm, question)
+    uk = answer_cache.key("understand", norm_q(question)) if answer_cache else None
+    u = answer_cache.get(uk) if uk else None
+    if u is None:
+        u, _ = understand(llm, question, registry)
+        if uk and "error" not in u:
+            answer_cache.put(uk, u)
+    # тип вопроса определяет модель (универсально); регулярные выражения — запасной путь, если разбор не удался
+    intent = u.get("intent") or ""
+    if intent == "task" or (not intent and TASK_VERBS.search(question)):
+        tr.append("Это просьба выполнить работу, а не вопрос по регламентам — отказ")
+        return Turn("task_refusal", "Я отвечаю только на вопросы по регламентам компании. Для таких задач в компании есть другие инструменты.",
+                    route=route_for(question), trace=tr)
+    if not intent and OUT_OF_SCOPE.search(question):
+        tr.append("Вопрос не про регламенты — подсказываю, куда обратиться")
+        r = route_for(question)
+        return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr)
     # исходная формулировка всегда в поиске: переписывание может увести в сторону (26.11: «заявка» → «РТЗ»)
-    queries = list(dict.fromkeys([strip_departments(question)] + [strip_departments(x) for x in u["queries"]]))[:4]
+    queries = list(dict.fromkeys([strip_departments(question, registry)] + [strip_departments(x, registry) for x in u["queries"]]))[:4]
     tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
     named = mentioned(question, registry) or _docs_for(set(u.get("departments") or []), u.get("stage", ""), registry)
     if named:
         tr.append("Дирекция названа в вопросе")
     scope = list(session.get("docs") or named or [d["doc_id"] for d in registry])
 
-    # 2. поиск по каждому документу и каждому запросу — параллельно
-    def doc_hits(doc_id):
-        """Слияние выдач по запросам: RRF по рангам (а не максимум скора) — пункт, лучший для одного
-        из запросов, не вытесняется пунктами с высоким скором по другим (26.11: ДБРЦТ п. 1.5)."""
+    # 2. поиск в два шага (универсальная версия): сначала по всей доступной базе — один раз на формулировку,
+    #    затем вглубь — только в лучших документах лучших дирекций. Число поисков не растёт с размером базы:
+    #    формулировки × (1 + дирекции ≤ MAX_DEPTS × документы ≤ DOCS_PER_DEPT).
+    def merged(allowed, k):
+        """Слияние выдач по формулировкам: RRF по рангам — пункт, лучший для одной из формулировок,
+        не вытесняется пунктами с высоким скором по другим (26.11: ДБРЦТ п. 1.5)."""
         best, rrf = {}, {}
         for qq in queries:
-            for r, h in enumerate(search_fn(qq, {doc_id})):
+            for r, h in enumerate(_search(search_fn, qq, allowed, k)):
                 wid = h["window_id"]
                 rrf[wid] = rrf.get(wid, 0) + 1 / (10 + r)
                 if wid not in best or h["score"] > best[wid]["score"]:
                     best[wid] = h
-        order = sorted(best, key=lambda w: -rrf[w])[:PER_DOC]
-        return doc_id, sorted((best[w] for w in order), key=lambda h: -h["score"])
+        order = sorted(best, key=lambda w: -rrf[w])[:k]
+        return sorted((best[w] for w in order), key=lambda h: -h["score"])
+
+    whole = not session.get("docs") and not named
+    global_hits = merged(None if whole else set(scope), GLOBAL_K)
+    doc_best = {}
+    for h in global_hits:
+        if h["doc_id"] in by_id:
+            doc_best[h["doc_id"]] = max(doc_best.get(h["doc_id"], 0), h["score"])
+    scope_depts = list(dict.fromkeys(by_id[d]["department"] for d in scope if d in by_id))
+    dept_best = {}
+    for d, sc in doc_best.items():
+        dept_best[by_id[d]["department"]] = max(dept_best.get(by_id[d]["department"], 0), sc)
+    if len(scope_depts) <= MAX_DEPTS:
+        cand_depts = scope_depts                       # маленькая база: вглубь во всех (так было на 4 документах)
+    else:
+        cand_depts = [d for d, _ in sorted(dept_best.items(), key=lambda kv: -kv[1])][:MAX_DEPTS]
+    deep = []
+    for dep in cand_depts:
+        docs = [d for d in scope if d in by_id and by_id[d]["department"] == dep]
+        docs.sort(key=lambda d: -doc_best.get(d, 0))
+        deep += docs[:DOCS_PER_DEPT]
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        per_doc = dict(ex.map(doc_hits, scope))
-    hits = sorted([h for hs in per_doc.values() for h in hs], key=lambda h: -h["score"])
+        per_doc = dict(zip(deep, ex.map(lambda d: merged({d}, PER_DOC), deep)))
+    hits = sorted({h["window_id"]: h for h in global_hits + [h for hs in per_doc.values() for h in hs]}.values(),
+                  key=lambda h: -h["score"])
     best = hits[0]["score"] if hits else 0
-    tr.append(f"Искал в {len(scope)} {plural(len(scope), 'регламенте', 'регламентах', 'регламентах')} по {len(queries)} {plural(len(queries), 'формулировке', 'формулировкам', 'формулировкам')}")
+    tr.append(f"Искал по всей базе ({len(scope)} {plural(len(scope), 'регламент', 'регламента', 'регламентов')}), затем подробно — "
+              f"в {len(deep)} {plural(len(deep), 'документе', 'документах', 'документах')}; {len(queries)} "
+              f"{plural(len(queries), 'формулировка', 'формулировки', 'формулировок')}")
 
     def escalate_or_scope(results):
         """(4) Перед письмом — проверка «вопрос вообще про процессы компании?»."""
@@ -316,6 +404,11 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
             return escalate_or_scope(results)
         return _final(results, note, tr, hits, session, question, complex_)
 
+    if intent == "out_of_scope" and best < OOS_SUPPORT:
+        tr.append("Вопрос не про процессы компании, и сильной опоры в регламентах нет — подсказываю, куда обратиться")
+        r = route_for(question)
+        return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
+
     if best < NO_SUPPORT:
         if not in_scope_llm(llm, question):
             tr.append("Подходящих пунктов нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
@@ -332,7 +425,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
         tr.append("Вопрос размытый — предлагаю близкие темы из регламентов")
         return _ask_turn(session, "topic", question, "Уточните, о чём вопрос:", topics + [ASK_SEND], tr, hits)
 
-    if FIND_DOC.search(question):
+    if intent == "find_document" or (not intent and FIND_DOC.search(question)):
         if top_refs(hits):
             ext = top_refs(hits)
             tr.append("Вопрос о том, где описано; найденный пункт отсылает к документу, которого нет в базе")
@@ -350,35 +443,38 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
         tr.append(f"Вопрос о том, где описано, — нашёл {len(docs_found)} {plural(len(docs_found), 'документ', 'документа', 'документов')}")
         return Turn("document", "Это описано здесь:", documents=docs_found, trace=tr, hits=hits)
 
-    # 3. дирекции, для которых готовим ответ: названные/выбранные или все, где есть опора (стадию система выбирает сама)
-    dept_best = {}
+    # 3. дирекции, для которых готовим ответ: названные/выбранные или лучшие по опоре (не больше MAX_DEPTS)
     for d, hs in per_doc.items():
         if hs:
             dep = by_id[d]["department"]
             dept_best[dep] = max(dept_best.get(dep, 0), hs[0]["score"])
+    names = dept_titles(registry)
     fixed = bool(session.get("docs") or named)
     if fixed:
-        depts = sorted({by_id[d]["department"] for d in scope}, key=lambda x: -dept_best.get(x, 0))
+        depts = sorted(scope_depts, key=lambda x: -dept_best.get(x, 0))
         tr.append("Дирекция " + ("выбрана вами" if session.get("docs") else "названа в вопросе"))
     else:
-        depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= NO_SUPPORT]
+        depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= NO_SUPPORT][:MAX_DEPTS]
         tr.append(f"Готовлю ответ по каждой дирекции, где нашлись пункты: {len(depts)}")
     # (2) комплексный проект: каждая дирекция отвечает за свою часть
     complex_ = len(depts) >= 2 and (session.get("complex") or len({by_id[d]["department"] for d in named}) >= 2)
 
-    # 4. ответ по каждой дирекции — параллельно; окна из всех её документов (пресейл/проект — внутри)
+    # 4. ответ по каждой дирекции — параллельно; контекст — по бюджету в знаках (решение 24.11: ≈ 21 тыс. знаков),
+    #    а не по числу окон: на PDF окна до 2 400 знаков, 18 окон переполнили бы контекст модели
     def one(dep):
         ws = []
-        for d in [x for x in scope if by_id[x]["department"] == dep] or [x["doc_id"] for x in registry if x["department"] == dep]:
+        for d in [x for x in deep if by_id[x]["department"] == dep]:
             doc = by_id[d]
-            for w in per_doc.get(d) or doc_hits(d)[1]:
-                ws.append({**w, "department_name": DEPT_NAMES.get(dep, dep),
+            for w in per_doc.get(d) or []:
+                ws.append({**w, "department_name": names.get(dep, dep),
                            "doc_title": "Практика службы качества" if w.get("kind") == "practice" else doc["display_title"]})
-        ws = sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"])[:PER_DEPT]
-        q = question + (COMPLEX_NOTE.format(dept=DEPT_NAMES.get(dep, dep)) if complex_ else "")
-        res, meta = llm_answer(llm, q, ws, DEPT_NAMES.get(dep, dep))
+        ws = budget(sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"]))
+        q = question + (COMPLEX_NOTE.format(dept=names.get(dep, dep)) if complex_ else "")
+        ws = fit_tokens(llm, q, ws, names.get(dep, dep))
+        res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache)
         meta["clauses_seen"] = [w["clause"] for w in ws]
-        return {"doc_id": dep, "label": DEPT_NAMES.get(dep, dep), "result": res, "meta": meta, "windows": ws}
+        meta["context_chars"] = sum(len(w["text"]) for w in ws)
+        return {"doc_id": dep, "label": names.get(dep, dep), "result": res, "meta": meta, "windows": ws}
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
     for r in results:
@@ -394,7 +490,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
 
     # 5. решение об уточнении — по verdict модели (разбор v4, исправление 1)
     answered = [r for r in results if r["result"]["verdict"] != "no_answer"]
-    silent = [DEPT_NAMES.get(d, d) for d in DEPT_NAMES if d not in {r["doc_id"] for r in answered}]
+    silent = [r["label"] for r in results if r["result"]["verdict"] == "no_answer"]   # только проверенные дирекции
     note = ("В регламентах " + (", ".join(silent[:-1]) + " и " + silent[-1] if len(silent) > 1 else silent[0])
             + " об этом не сказано.") if answered and silent else ""
     if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:

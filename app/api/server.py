@@ -14,6 +14,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from app.answer.cache import AnswerCache
 from app.dialog.clarify import label
 from app.escalation import draft as qa_draft
 from app.escalation import mail
@@ -23,6 +24,7 @@ from app.ingest.upload import Uploads, parse_multipart
 from app.pipeline import run_turn
 from app.registry.build import run as build_registry
 from app.search.bm25 import BM25
+from app.search.vectors import VectorStore
 
 ROOT = Path(__file__).resolve().parents[2]
 UI = ROOT / "ui"
@@ -66,6 +68,7 @@ class App:
         self.windows = [w.to_dict() for w in wins]
         self.store = Store(str(data / "app.sqlite"))
         self.lock = threading.Lock()
+        self.answer_cache = AnswerCache()
         self.uploads = Uploads(str(data / "uploads.sqlite"), data / "uploads", os.environ.get("DOC_INTEL_URL", ""),
                                os.environ.get("DOC_INTEL_TOKEN_FILE", ""))
         for doc, ws in self.uploads.load_ready():
@@ -79,6 +82,7 @@ class App:
         self.log = data / "journal.jsonl"
         if mock:
             self.llm = self.review_llm = MockLLM()
+            self._pc0 = None
             self.review_model = "mock"
             self._rebuild_mock()
         else:
@@ -90,8 +94,9 @@ class App:
             # второй проход по обращениям (черновик для СК): можно направить на более крупную open-weights модель
             self.review_model = os.environ.get("LLM_REVIEW_MODEL") or os.environ.get("LLM_MODEL", "qwen38")
             self.review_llm = LLM(os.environ.get("LLM_REVIEW_URL") or os.environ["LLM_BASE_URL"], self.review_model)
-            self.vec = dict(zip([w["window_id"] for w in self.windows],
-                                self.tei.embed([w["path"] + "\n" + w["text"] for w in self.windows])))
+            self.vec_store = VectorStore(data / "vectors.jsonl")       # векторы на диске: перезапуск без пересчёта
+            self.vec = self.vec_store.load()
+            self._pc0 = self.llm.prefix_cache()
             self.Hybrid = Hybrid
             self._rebuild_real()
 
@@ -104,14 +109,18 @@ class App:
 
     def _rebuild_real(self):
         allw = self.all_windows()
-        missing = [w for w in allw if w["window_id"] not in self.vec]
-        if missing:
-            self.vec.update(zip([w["window_id"] for w in missing], self.tei.embed([w["path"] + "\n" + w["text"] for w in missing])))
-        self.hy = self.Hybrid(allw, [self.vec[w["window_id"]] for w in allw], self.tei.embed, self.tei.rerank)
+        missing = [w for w in allw if self.vec_store.key(w) not in self.vec]
+        for i in range(0, len(missing), 256):                         # пачками: большая база не упирается в лимит TEI
+            part = missing[i:i + 256]
+            vs = self.tei.embed([w["path"] + "\n" + w["text"] for w in part])
+            self.vec_store.add({self.vec_store.key(w): v for w, v in zip(part, vs)})
+            self.vec.update({self.vec_store.key(w): v for w, v in zip(part, vs)})
+        self.hy = self.Hybrid(allw, [self.vec[self.vec_store.key(w)] for w in allw], self.tei.embed, self.tei.rerank)
 
     def rebuild(self):
         with self.lock:
             self._rebuild_mock() if self.mock else self._rebuild_real()
+            self.answer_cache.invalidate()        # индекс изменился — сохранённые ответы могут устареть
 
     # --- загрузка документов (служба качества) ---
     def upload(self, file_name, data, department, stage):
@@ -137,6 +146,13 @@ class App:
         self.uploads.remove(doc_id)
         self.rebuild()
 
+    def cache_stats(self):
+        pc = None if self.mock else self.llm.prefix_cache()
+        if pc and self._pc0:
+            dq, dh = pc["queries"] - self._pc0["queries"], pc["hits"] - self._pc0["hits"]
+            pc = {**pc, "hit_rate_since_start": round(dh / dq, 3) if dq else None}
+        return {"answers": self.answer_cache.stats(), "vllm_prefix": pc}
+
     def analytics(self):
         rows = []
         if self.log.exists():
@@ -149,18 +165,18 @@ class App:
                 "p50": times[len(times) // 2] if times else None, "p95": times[max(0, int(len(times) * .95) - 1)] if times else None,
                 "no_answer_top": noans.most_common(10), "cases": len(self.store.cases()),
                 "practices": sum(1 for p in self.store.practices(only_published=False) if p["status"] == "published"),
-                "recent": rows[-15:][::-1]}
+                "recent": rows[-15:][::-1], "cache": self.cache_stats()}
 
-    def search(self, q, allowed):
+    def search(self, q, allowed, k=16):
         """Практика ищется вместе с документом подразделения: allowed расширяется practice:<dep>."""
         if allowed:
             deps = {d["department"] for d in self.registry if d["doc_id"] in allowed}
             allowed = set(allowed) | {f"practice:{d}" for d in deps}
         if self.mock:
-            hits = self.bm.search(q, k=10, allowed=allowed)
+            hits = self.bm.search(q, k=k, allowed=allowed)
             top = hits[0]["score"] if hits else 1
             return [{**h, "score": round(min(0.99, h["score"] / top), 3)} for h in hits]
-        return self.hy.search(q, k=16, allowed=allowed)[0]
+        return self.hy.search(q, k=k, allowed=allowed)[0]
 
     # --- ход диалога ---
     def ask(self, sid, question, choice=None, employee="", no_clarify=None):
@@ -184,7 +200,7 @@ class App:
             s.pop("cache", None)
             s.pop("ask", None)
         t0 = time.time()
-        turn = run_turn(q, self.registry, self.search, self.llm, session=s)   # s хранит кэш ответов по дирекциям для второго хода
+        turn = run_turn(q, self.registry, self.search, self.llm, session=s, answer_cache=self.answer_cache)   # s хранит кэш ответов по дирекциям для второго хода
         out = {"outcome": turn.outcome, "text": turn.text, "tokens": turn.tokens, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
                "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": []}

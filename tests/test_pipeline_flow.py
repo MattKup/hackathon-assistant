@@ -43,8 +43,8 @@ class FakeLLM:
 
 
 def search_for(windows):
-    def search(q, allowed):
-        return [w for w in windows if w["doc_id"] in allowed]
+    def search(q, allowed, k=16):
+        return [w for w in windows if allowed is None or w["doc_id"] in allowed][:k]
     return search
 
 
@@ -190,3 +190,81 @@ class DialogTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UniversalTest(unittest.TestCase):
+    """Универсальная версия: тип вопроса от модели, большая база, бюджет контекста, кэш ответов, новое подразделение."""
+
+    class IntentLLM(FakeLLM):
+        def __init__(self, intent, answers=None, **kw):
+            super().__init__(answers or {}, **kw)
+            self.intent = intent
+
+        def chat_json(self, system, user, schema, max_tokens=1500):
+            if "готовишь поиск" in system:
+                return {"queries": ["запрос"], "departments": [], "stage": "", "vague": False, "intent": self.intent}, {}
+            return super().chat_json(system, user, schema, max_tokens)
+
+    def test_intent_task_and_find_document(self):
+        t = run_turn("Подготовь мне письмо заказчику", REG, search_for(WINS), self.IntentLLM("task"), session={})
+        self.assertEqual(t.outcome, "task_refusal")
+        t = run_turn("Где у нас про сроки расчёта?", REG, search_for(WINS), self.IntentLLM("find_document"), session={})
+        self.assertEqual(t.outcome, "document")
+
+    def test_out_of_scope_intent_overridden_by_strong_support(self):
+        llm = self.IntentLLM("out_of_scope", {"Техническая дирекция": "answer"})
+        t = run_turn("За сколько запускать расчёт конкурса?", REG, search_for(WINS), llm, session={"no_clarify": True})
+        self.assertNotEqual(t.outcome, "out_of_scope")           # лучший пункт 0,9 ≥ 0,5 — отвечаем
+        weak = [dict(w, score=0.2) for w in WINS]
+        t = run_turn("Какой ноутбук купить?", REG, search_for(weak), self.IntentLLM("out_of_scope"), session={})
+        self.assertEqual(t.outcome, "out_of_scope")
+
+    def test_large_base_bounded(self):
+        reg, wins = [], []
+        for i in range(12):                                     # 12 подразделений × 3 документа
+            for j in range(3):
+                d = f"d{i}_{j}"
+                reg.append({"doc_id": d, "department": f"DEP{i}", "stage": "full_cycle", "department_name": f"Дирекция {i}",
+                            "display_title": d})
+                DEPT[d] = f"DEP{i}"
+                wins.append(win(d, f"{j}.1", f"Заявку подают за {i + 1} рабочих дня до предложения.", 0.9 - i * 0.03))
+        calls = []
+
+        def search(q, allowed, k=16):
+            calls.append(allowed)
+            return [w for w in wins if allowed is None or w["doc_id"] in allowed][:k]
+        answers = {f"Дирекция {i}": "answer" for i in range(12)}
+        llm = FakeLLM(answers)
+        t = run_turn("За сколько подавать заявку?", reg, search, llm, session={"no_clarify": True})
+        self.assertEqual(len(t.answers), 3)                     # не больше MAX_DEPTS
+        self.assertLessEqual(len(calls), 2 * (1 + 3 * 3))       # 2 формулировки × (общий + ≤ 3 дирекции × 3 документа); без предела было бы 2 × 36
+        self.assertEqual(calls[0], None)                        # сначала — вся база
+
+    def test_context_budget_in_chars(self):
+        from app.pipeline import CTX_CHARS, budget
+        long = [dict(win("tech", f"{i}", "а" * 2400, 0.9 - i * 0.01)) for i in range(18)]
+        ws = budget(long)
+        self.assertLessEqual(sum(len(w["text"]) for w in ws), CTX_CHARS)
+        self.assertLess(len(ws), 18)
+
+    def test_answer_cache_between_users(self):
+        from app.answer.cache import AnswerCache
+        cache = AnswerCache()
+        llm = FakeLLM({"ДБРЦТ": "answer"})
+        run_turn("ДБРЦТ: за сколько подавать заявку?", REG, search_for(WINS), llm, session={}, answer_cache=cache)
+        n = len(llm.calls)
+        t = run_turn("ДБРЦТ:  за сколько подавать заявку", REG, search_for(WINS), llm, session={}, answer_cache=cache)
+        self.assertEqual(len(llm.calls), n)                     # другой пользователь, тот же вопрос — без модели
+        self.assertTrue(t.answers[0]["meta"].get("from_cache"))
+        cache.invalidate()                                      # пересборка индекса — кэш сброшен
+        run_turn("ДБРЦТ: за сколько подавать заявку?", REG, search_for(WINS), llm, session={}, answer_cache=cache)
+        self.assertGreater(len(llm.calls), n)
+
+    def test_new_department_without_code(self):
+        reg = REG + [{"doc_id": "law", "department": "LAW", "stage": "full_cycle", "department_name": "Юридический департамент",
+                      "display_title": "Юр"}]
+        DEPT["law"] = "LAW"
+        ws = WINS + [win("law", "2.1", "Договор согласует юрист за два рабочих дня.", 0.95)]
+        llm = FakeLLM({"Юридический департамент": "answer"})
+        t = run_turn("Юридический департамент: кто согласует договор?", reg, search_for(ws), llm, session={})
+        self.assertEqual([a["label"] for a in t.answers], ["Юридический департамент"])
