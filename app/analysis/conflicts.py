@@ -411,7 +411,7 @@ def select(scored, budget=300, cross_share=0.2, per_window=6):
         for p in pool:
             if len(out) >= n:
                 break
-            if used[p["a"]] >= per_window or used[p["b"]] >= per_window:
+            if per_window and (used[p["a"]] >= per_window or used[p["b"]] >= per_window):
                 continue
             used[p["a"]] += 1
             used[p["b"]] += 1
@@ -419,6 +419,9 @@ def select(scored, budget=300, cross_share=0.2, per_window=6):
         return out
     inn = [p for p in scored if p["passed"] and p["relation"] != "cross_dept"]
     crs = [p for p in scored if p["passed"] and p["relation"] == "cross_dept"]
+    if budget is None:                 # ночной режим: все пары после фильтра
+        budget = len(inn) + len(crs)
+        cross_share = len(crs) / max(1, budget)
     n_cross = min(len(crs), int(round(budget * cross_share)))
     used = Counter()
     got_in = take(inn, budget - n_cross, used)
@@ -459,6 +462,40 @@ situation — общая ситуация или действие, о котор
 quote_a — дословный фрагмент пункта A (скопируй символ в символ, одно предложение или его часть), quote_b — из пункта B.
 explanation — 1–2 коротких предложения (до 300 знаков): в чём несовместимость или почему это не противоречие.
 Для kind=none цитаты можно оставить пустыми."""
+
+_SOFT_RULE = ("Будь строг: contradiction ставь только при явной несовместимости одного и того же действия. Сомневаешься между\n"
+              "contradiction и possible — ставь possible. Сомневаешься между possible и none — ставь none.")
+# Этап 1 ночного режима — мягкий судья (полнота): без списка «не противоречие» (прогон 1: 5/7 ориентиров)
+SYSTEM_SOFT = SYSTEM[:SYSTEM.index("НЕ противоречие (ставь none):")] + _SOFT_RULE + SYSTEM[SYSTEM.index("\n\nsituation —"):]
+
+_VERIFY_KINDS = """Виды (поле kind):
+- contradiction — оба пункта про одну и ту же ситуацию, шаг и роль, и выполнить оба указания одновременно нельзя:
+  разные сроки одного действия; два разных ответственных за одно и то же действие; запрет в одном и разрешение
+  в другом без оговорённого исключения; несовместимый порядок шагов или статусов.
+- possible — указания выглядят несовместимыми; различие может объясняться этапом, объектом или случаем,
+  но САМ ТЕКСТ этого не оговаривает — нужно решение службы качества.
+- none — противоречия нет: оба требования выполнимы вместе; пункты про разные этапы, объекты или случаи и это
+  видно из текста; один пункт уточняет другой; общее правило и явно оговорённое исключение; разные списки
+  участников со словами «может привлекать»; «кто организует» и «кто выполняет» — разные роли."""
+
+VERIFY_STRICT = ("Ты — ревизор службы качества. Перепроверь, есть ли несовместимость между пунктами регламента A и B.\n"
+                 "Опирайся только на текст пунктов, ничего не додумывай.\n\n" + _VERIFY_KINDS + "\n\n"
+                 "Если текст сам не объясняет, почему оба указания совместимы, — possible, а не none.\n"
+                 "reason — 1–2 коротких предложения (до 300 знаков) с опорой на слова пунктов.")
+
+VERIFY_ADVOCATE = ("Ты — адвокат регламента. Твоя задача — защитить пункты A и B от обвинения в противоречии.\n"
+                   "1) defense: найди лучшее объяснение, почему они НЕ противоречат друг другу (разные этапы, объекты,\n"
+                   "   случаи; оба требования выполнимы вместе; исключение оговорено; один пункт уточняет другой).\n"
+                   "2) defense_from_text: true, если объяснение прямо следует из слов пунктов; false, если для него\n"
+                   "   приходится додумывать то, чего в тексте нет.\n"
+                   "3) kind: none — если защита держится на тексте; иначе possible или contradiction.\n\n" + _VERIFY_KINDS)
+
+VERIFY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["reason", "kind"],
+                 "properties": {"reason": {"type": "string"},
+                                "kind": {"type": "string", "enum": ["contradiction", "possible", "none"]}}}
+ADVOCATE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["defense", "defense_from_text", "kind"],
+                   "properties": {"defense": {"type": "string"}, "defense_from_text": {"type": "boolean"},
+                                  "kind": {"type": "string", "enum": ["contradiction", "possible", "none"]}}}
 
 SCHEMA = {"type": "object", "additionalProperties": False,
           "required": ["situation", "quote_a", "quote_b", "explanation", "kind"],
@@ -512,9 +549,42 @@ def _numbers_ok(expl, wa, wb):
     return not (set(NUM.findall(t)) - have)
 
 
-def judge_pair(llm, wa, wb, p, max_tokens=900):
-    raw, meta = llm.chat_json(SYSTEM, build_user(wa, wb, p["relation"], p["signals"]), SCHEMA, max_tokens=max_tokens)
+def judge_pair(llm, wa, wb, p, max_tokens=900, system=None):
+    raw, meta = llm.chat_json(system or SYSTEM, build_user(wa, wb, p["relation"], p["signals"]), SCHEMA, max_tokens=max_tokens)
     return raw, meta
+
+
+def _verify_user(wa, wb, rel):
+    return (f"Отношение пунктов: {REL_RU[rel]}.\n\nПункт A — {_head(wa)}\n{wa['text']}\n\n"
+            f"Пункт B — {_head(wb)}\n{wb['text']}\n\nПерепроверь пункты A и B и верни JSON.")
+
+
+VOTERS = (("strict_ab", VERIFY_STRICT, VERIFY_SCHEMA, False),
+          ("strict_ba", VERIFY_STRICT, VERIFY_SCHEMA, True),       # порядок B↔A: модель склонна к первому пункту
+          ("advocate", VERIFY_ADVOCATE, ADVOCATE_SCHEMA, False))
+
+
+def vote(llm, wa, wb, rel, voter, max_tokens=700):
+    name, system, schema, swap = voter
+    user = _verify_user(wb, wa, rel) if swap else _verify_user(wa, wb, rel)
+    raw, meta = llm.chat_json(system, user, schema, max_tokens=max_tokens)
+    kind = raw.get("kind") if raw.get("kind") in ("contradiction", "possible", "none") else "none"
+    return {"voter": name, "kind": kind, "reason": (raw.get("reason") or raw.get("defense") or "").strip(),
+            "defense_from_text": raw.get("defense_from_text")}, meta
+
+
+def decide(votes):
+    """Большинство из трёх перепроверок: ≥ 2 «есть несовместимость» — находка выжила; вид — contradiction,
+    если так считают ≥ 2, иначе possible. Уверенность — доля голосов за итоговый вид."""
+    ks = [v["kind"] for v in votes]
+    n = len(ks)
+    bad = sum(k in ("contradiction", "possible") for k in ks)
+    contra = ks.count("contradiction")
+    if n == 0 or bad * 2 <= n:
+        return None, round((n - bad) / max(1, n), 2)
+    kind = "contradiction" if contra * 2 > n else "possible"
+    agree = contra if kind == "contradiction" else bad
+    return kind, round(agree / n, 2)
 
 
 def offline_judge(wa, wb, p):
@@ -614,77 +684,145 @@ def enrich(windows, docs):
             for w in windows]
 
 
-def analyze(windows, docs, llm, budget=300, k=8, k_cross=3, cross_share=0.2, vectors=None, workers=4, log=print):
+NIGHT = {"sim_pass": 0.4, "sim_cond": 0.15, "sim_min": 0.0, "m_block": 25, "per_window": None}
+
+
+def _pmap(fn, items, workers):
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        yield from ex.map(fn, items)
+
+
+def analyze(windows, docs, llm, budget=300, k=8, k_cross=3, cross_share=0.2, vectors=None, workers=4, log=print,
+            night=False, changed=None):
+    """night=True — ночной режим «точность выше стоимости»: без бюджета, шире фильтр, мягкий судья (этап 1)
+    + три независимые перепроверки каждой находки contradiction/possible (этап 2), итог — по большинству.
+    changed — множество doc_id: инкрементальный режим, только пары, где есть пункт изменённого документа."""
     t0 = time.time()
     windows = enrich(windows, docs)
-    pairs = candidates(windows, k=k, k_cross=k_cross, vectors=vectors)
+    pairs = candidates(windows, k=k, k_cross=k_cross, vectors=vectors, m_block=NIGHT["m_block"] if night else 10)
     t_cand = time.time() - t0
-    scored = score_pairs(windows, pairs)
-    chosen = select(scored, budget=budget, cross_share=cross_share)
+    flt = {x: NIGHT[x] for x in ("sim_pass", "sim_cond", "sim_min")} if night else {}
+    scored = score_pairs(windows, pairs, **flt)
+    if changed is not None:
+        scored = [p for p in scored if windows[p["a"]]["doc_id"] in changed or windows[p["b"]]["doc_id"] in changed]
+    chosen = select(scored, budget=None if night else budget, cross_share=cross_share,
+                    per_window=NIGHT["per_window"] if night else 6)
     log(f"окон={len(windows)} пар-кандидатов={len(pairs)} после фильтра={sum(p['passed'] for p in scored)} "
-        f"к LLM={len(chosen)} ({time.time() - t0:.1f} с)")
+        f"к LLM={len(chosen)} режим={'ночь' if night else 'бюджет'} ({time.time() - t0:.1f} с)")
     findings, rejected, errors, judged = [], [], [], []
     tok = Counter()
     t1 = time.time()
+    system1 = SYSTEM_SOFT if night else SYSTEM
 
     def one(p):
         wa, wb = windows[p["a"]], windows[p["b"]]
         try:
             if llm is None:
                 return p, offline_judge(wa, wb, p), {}, None
-            raw, meta = judge_pair(llm, wa, wb, p)
+            raw, meta = judge_pair(llm, wa, wb, p, system=system1)
             return p, raw, meta, None
         except Exception as ex:                       # сбой одной пары не останавливает прогон
             return p, None, {}, str(ex)[:200]
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        for n, (p, raw, meta, err) in enumerate(ex.map(one, chosen), 1):
-            tok["prompt"] += meta.get("prompt_tokens") or 0
-            tok["completion"] += meta.get("completion_tokens") or 0
-            wa, wb = windows[p["a"]], windows[p["b"]]
-            if err:
-                errors.append({"a": _ref(wa), "b": _ref(wb), "error": err})
-                continue
-            judged.append({"order": p["order"], "a": _ref(wa), "b": _ref(wb), "relation": p["relation"],
-                           "score": p["score"], "signals": p["signals"], "llm_kind": raw.get("kind"),
-                           "explanation": raw.get("explanation", "")})
-            f, r = postprocess(raw, wa, wb, p)
-            if f:
-                findings.append(f)
-            if r:
-                rejected.append(r)
-            if n % 25 == 0:
-                log(f"  {n}/{len(chosen)} находок={len(findings)} отброшено={len(rejected)} ошибок={len(errors)}")
+    for n, (p, raw, meta, err) in enumerate(_pmap(one, chosen, workers), 1):
+        tok["prompt"] += meta.get("prompt_tokens") or 0
+        tok["completion"] += meta.get("completion_tokens") or 0
+        wa, wb = windows[p["a"]], windows[p["b"]]
+        if err:
+            errors.append({"stage": 1, "a": _ref(wa), "b": _ref(wb), "error": err})
+            continue
+        judged.append({"order": p["order"], "a": _ref(wa), "b": _ref(wb), "relation": p["relation"],
+                       "score": p["score"], "signals": p["signals"], "llm_kind": raw.get("kind"),
+                       "explanation": raw.get("explanation", "")})
+        f, r = postprocess(raw, wa, wb, p)
+        if f:
+            f["_ab"] = (p["a"], p["b"])
+            findings.append(f)
+        if r:
+            rejected.append(r)
+        if n % 50 == 0:
+            log(f"  этап 1: {n}/{len(chosen)} находок={len(findings)} отброшено={len(rejected)} ошибок={len(errors)}")
     t_llm = time.time() - t1
+
+    # этап 2: перепроверка (только ночью и только с LLM)
+    review_rejected, tok2, t2 = [], Counter(), time.time()
+    to_check = [f for f in findings if night and llm is not None and f["kind"] in ("contradiction", "possible")]
+    jobs = [(f, v) for f in to_check for v in VOTERS]
+
+    def vjob(fv):
+        f, v = fv
+        wa, wb = windows[f["_ab"][0]], windows[f["_ab"][1]]
+        try:
+            res, meta = vote(llm, wa, wb, f["relation"], v)
+            return f, res, meta, None
+        except Exception as ex:
+            return f, None, {}, str(ex)[:200]
+
+    for f, res, meta, err in _pmap(vjob, jobs, workers):
+        tok2["prompt"] += meta.get("prompt_tokens") or 0
+        tok2["completion"] += meta.get("completion_tokens") or 0
+        if err:
+            errors.append({"stage": 2, "a": f["a"], "b": f["b"], "error": err})
+            continue
+        f.setdefault("votes", []).append(res)
+    survived, check_ids, n_stage1 = [], {id(f) for f in to_check}, len(findings)
+    for f in findings:
+        if id(f) in check_ids:
+            f["stage1_kind"] = f["kind"]
+            kind, conf = decide(f.get("votes", []))
+            if kind is None:
+                review_rejected.append({**f, "confidence_none": conf})
+                continue
+            f["kind"], f["confidence"] = kind, conf
+        survived.append(f)
+    if to_check:
+        log(f"  этап 2: перепроверено {len(to_check)}, выжило {len(to_check) - len(review_rejected)}, "
+            f"вызовов {len(jobs)} ({time.time() - t2:.0f} с)")
+    t_rev = time.time() - t2
+    findings = survived
+    for f in findings + review_rejected:
+        f.pop("_ab", None)
     seen, uniq = set(), []
-    for f in sorted(findings, key=lambda f: (list(KIND_RU).index(f["kind"]), -f["score"])):
+    for f in sorted(findings, key=lambda f: (list(KIND_RU).index(f["kind"]), -f.get("confidence", 0), -f["score"])):
         key = tuple(sorted([(f["a"]["doc_id"], f["a"]["clause"]), (f["b"]["doc_id"], f["b"]["clause"])]))
         if key not in seen:
             seen.add(key)
             uniq.append(f)
     for i, f in enumerate(uniq, 1):
         f["id"] = f"F{i:03d}"
+    for i, f in enumerate(review_rejected, 1):
+        f["id"] = f"R{i:03d}"
     deps = dependencies(windows)
     rel_c = Counter(p["relation"] for p in scored)
     passed_c = Counter(p["relation"] for p in scored if p["passed"])
     calls = len(chosen)
-    m = {"docs": len(docs), "windows": len(windows), "k": k, "k_cross": k_cross, "budget": budget,
+    m = {"docs": len(docs), "doc_ids": sorted(d["doc_id"] for d in docs), "windows": len(windows), "k": k,
+         "k_cross": k_cross, "budget": None if night else budget, "night": night,
+         "changed_docs": sorted(changed) if changed is not None else None,
          "dense": vectors is not None, "candidate_pairs": len(pairs), "candidates_by_relation": dict(rel_c),
          "passed_filter": sum(passed_c.values()), "passed_by_relation": dict(passed_c),
          "llm_calls": calls, "llm_errors": len(errors), "prompt_tokens": tok["prompt"],
          "completion_tokens": tok["completion"],
          "tokens_per_call": {"prompt": round(tok["prompt"] / max(1, calls)), "completion": round(tok["completion"] / max(1, calls))},
          "llm_kind_raw": dict(Counter(j["llm_kind"] for j in judged)),
+         "stage1_findings": n_stage1,
+         "review": {"checked": len(to_check), "survived": len(to_check) - len(review_rejected),
+                    "rejected": len(review_rejected), "llm_calls": len(jobs), "prompt_tokens": tok2["prompt"],
+                    "completion_tokens": tok2["completion"], "seconds": round(t_rev, 1),
+                    "confidence": dict(Counter(str(f.get("confidence")) for f in uniq if "confidence" in f))},
          "findings_by_kind": dict(Counter(f["kind"] for f in uniq)),
          "findings_by_kind_at_budget": {str(n): dict(Counter(f["kind"] for f in uniq if f["order"] <= n))
                                         for n in (100, 200, 300, 500) if n < calls},
          "mode": "llm" if llm is not None else "offline", "rejected": len(rejected),
          "rejected_by_reason": dict(Counter(r["reason"] for r in rejected)),
          "dependencies_code": dict(Counter(d["kind"] for d in deps)),
-         "seconds_candidates": round(t_cand, 1), "seconds_llm": round(t_llm, 1), "seconds_total": round(time.time() - t0, 1),
-         "workers": workers}
+         "seconds_candidates": round(t_cand, 1), "seconds_llm": round(t_llm, 1), "seconds_review": round(t_rev, 1),
+         "seconds_total": round(time.time() - t0, 1), "workers": workers,
+         "llm_calls_total": calls + len(jobs), "prompt_tokens_total": tok["prompt"] + tok2["prompt"],
+         "completion_tokens_total": tok["completion"] + tok2["completion"]}
     m["scale_300_docs"] = scale_estimate(m)
-    return {"findings": uniq, "rejected": rejected, "errors": errors, "dependencies": deps, "judged": judged, "metrics": m}
+    return {"findings": uniq, "rejected": rejected, "review_rejected": review_rejected, "errors": errors,
+            "dependencies": deps, "judged": judged, "metrics": m}
 
 
 def scale_estimate(m, docs_target=300):
@@ -695,24 +833,33 @@ def scale_estimate(m, docs_target=300):
     per_win = m["candidate_pairs"] / m["windows"]
     frac = m["passed_filter"] / max(1, m["candidate_pairs"])
     calls = w * per_win * frac
-    tin, tout = m["tokens_per_call"]["prompt"], m["tokens_per_call"]["completion"]
-    rate = m["llm_calls"] / m["seconds_llm"] if m["seconds_llm"] else None
+    rv = m.get("review") or {}
+    k2 = rv.get("llm_calls", 0) / max(1, m["llm_calls"])            # вызовов перепроверки на вызов этапа 1
+    tin = (m["prompt_tokens"] + rv.get("prompt_tokens", 0)) / max(1, m["llm_calls"])
+    tout = (m["completion_tokens"] + rv.get("completion_tokens", 0)) / max(1, m["llm_calls"])
+    secs = m["seconds_llm"] + m.get("seconds_review", 0)
+    rate = m["llm_calls"] / secs if secs else None
     return {"docs": docs_target, "windows": round(w), "candidate_pairs": round(w * per_win),
-            "llm_calls_no_cap": round(calls), "prompt_tokens": round(calls * tin), "completion_tokens": round(calls * tout),
+            "llm_calls_no_cap": round(calls * (1 + k2)), "prompt_tokens": round(calls * tin), "completion_tokens": round(calls * tout),
             "hours_at_measured_rate": round(calls / rate / 3600, 1) if rate else None,
-            "note": "без бюджета; tf-idf индекс линейный; эмбеддинги — нужен ANN/numpy вместо полной матрицы"}
+            "note": "без бюджета, этапы 1+2; tf-idf индекс линейный; эмбеддинги — нужен ANN/numpy вместо полной матрицы"}
 
 
 # ---------------------------------------------------------------- отчёт
 def write_outputs(report, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "conflicts.json").write_text(json.dumps(
-        {k: report[k] for k in ("findings", "rejected", "errors", "dependencies", "judged", "metrics")}, ensure_ascii=False, indent=2))
+        {k: report.get(k, []) for k in ("findings", "review_rejected", "rejected", "errors", "dependencies", "judged", "metrics")}, ensure_ascii=False, indent=2))
     (out_dir / "conflicts.md").write_text(render_md(report))
 
 
 def _loc(r):
     return f"{r['department']} · {r['doc_title']} · {r.get('label') or 'п. ' + str(r['clause'])}"
+
+
+VOTER_RU = {"strict_ab": "ревизор (A→B)", "strict_ba": "ревизор (B→A)", "advocate": "адвокат"}
+KIND_SHORT = {"contradiction": "противоречие", "possible": "возможное", "none": "нет", "dependency": "зависимость",
+              "dept_difference": "различие дирекций"}
 
 
 def render_md(report):
@@ -721,7 +868,9 @@ def render_md(report):
          f"Документов: {m['docs']}, пунктов-окон: {m['windows']}. Пар-кандидатов: {m['candidate_pairs']}, "
          f"после фильтра: {m['passed_filter']}, проверено LLM: {m['llm_calls']}. "
          f"Найдено: " + ", ".join(f"{KIND_RU.get(k, k)} — {v}" for k, v in m["findings_by_kind"].items()) +
-         f". Отброшено проверкой цитат/чисел: {m['rejected']}.", "",
+         f". Отброшено проверкой цитат/чисел: {m['rejected']}"
+         + (f", перепроверкой: {m['review']['rejected']} из {m['review']['checked']}" if m.get("review", {}).get("checked") else "")
+         + ".", "",
          "Находки опираются только на дословные цитаты пунктов (проверено кодом). «Возможное противоречие» и "
          "«Противоречие» — на решение службы качества; автоматически правило не выбирается.", ""]
     for kind in ("contradiction", "possible", "dependency", "dept_difference"):
@@ -742,9 +891,22 @@ def render_md(report):
                     L.append("- Сигналы кода: " + "; ".join(SIGNAL_RU[s] for s in f["signals"]) + f" (скор {f['score']})")
                 if f.get("reclassified"):
                     L.append(f"- Вид уточнён кодом: {f['reclassified']} (модель: {f['llm_kind']})")
+                if f.get("votes"):
+                    L.append(f"- Перепроверка (3 независимых судьи): уверенность {f['confidence']:.0%}; "
+                             + "; ".join(f"{VOTER_RU.get(v['voter'], v['voter'])} — {KIND_SHORT[v['kind']]}" for v in f["votes"]))
                 if kind in ("contradiction", "possible"):
                     L.append("- Требует решения службы качества.")
                 L.append("")
+    rr = report.get("review_rejected") or []
+    if rr:
+        L += [f"## Отклонено перепроверкой ({len(rr)}) — для разбора", "",
+              "Этап 1 (мягкий судья) счёл несостыковкой, большинство из трёх перепроверок — нет.", ""]
+        for f in rr:
+            L += [f"**{f['id']}. {_loc(f['a'])} ↔ п. {f['b']['clause']}** — этап 1: {KIND_SHORT.get(f.get('stage1_kind', f['kind']), f['kind'])}",
+                  f"- «{f['a']['quote']}» ↔ «{f['b']['quote']}»", f"- Этап 1: {f['explanation']}"]
+            for v in f.get("votes", []):
+                L.append(f"- {VOTER_RU.get(v['voter'], v['voter'])} — {KIND_SHORT[v['kind']]}: {v['reason']}")
+            L.append("")
     deps = report["dependencies"]
     if deps:
         L += [f"## Зависимости от других документов и пунктов ({len(deps)}, найдены кодом)", ""]
