@@ -23,12 +23,14 @@ def win(doc, clause, text, score, ext=()):
 class FakeLLM:
     """answers: {«Техническая дирекция»: verdict}; scope: in_scope для классификатора темы."""
 
-    def __init__(self, answers, scope=True, vague=False, extra=None):
+    def __init__(self, answers, scope=True, vague=False, extra=None, dept_unknown=False):
         self.answers, self.scope, self.calls, self.vague, self.extra = answers, scope, [], vague, extra or {}
+        self.dept_unknown = dept_unknown
 
     def chat_json(self, system, user, schema, max_tokens=1500):
         if "готовишь поиск" in system:
-            return {"queries": ["запрос"], "departments": [], "stage": "", "vague": self.vague}, {"prompt_tokens": 100, "completion_tokens": 10}
+            return {"queries": ["запрос"], "departments": [], "stage": "", "vague": self.vague, "dept_unknown": self.dept_unknown}, \
+                {"prompt_tokens": 100, "completion_tokens": 10}
         if "классифицируешь" in system:
             return {"in_scope": self.scope}, {}
         dept = re.search(r"Подразделение: (.+)", user).group(1).strip()
@@ -87,8 +89,24 @@ class VerdictFlowTest(unittest.TestCase):
     def test_all_no_answer_escalate_or_out_of_scope(self):
         t = run_turn("Сколько лет хранить документацию проекта?", REG, search_for(WINS), FakeLLM({}), session={})
         self.assertEqual(t.outcome, "escalate")
-        t = run_turn("Какой ноутбук купить домой для игр?", REG, search_for(WINS), FakeLLM({}, scope=False), session={})
+        weak = [{**w, "score": 0.1} for w in WINS]
+        t = run_turn("Какой ноутбук купить домой для игр?", REG, search_for(weak), FakeLLM({}, scope=False), session={})
         self.assertEqual(t.outcome, "out_of_scope")
+
+    def test_dept_unknown_in_question_compares_all(self):
+        """Г2: сотрудник сам пишет «не знаю, чья дирекция» — ответы по всем, без повторного вопроса; режим — только на ход."""
+        sess = {}
+        llm = FakeLLM({"Техническая дирекция": "answer", "ДБРЦТ": "answer"}, dept_unknown=True)
+        t = run_turn("Не знаю, чей контур: за сколько подавать заявку?", REG, search_for(WINS), llm, session=sess)
+        self.assertNotEqual(t.outcome, "clarify")
+        self.assertEqual(len(t.answers), 2)
+        self.assertNotIn("no_clarify", sess)
+
+    def test_strong_support_never_out_of_scope(self):
+        """Г1: пункты по теме найдены (сильная опора), а модель не ответила — письмо в СК, а не «вне регламентов»
+        по одному тексту вопроса (разговорная формулировка)."""
+        t = run_turn("Короче, клиент торопит — сколько просить?", REG, search_for(WINS), FakeLLM({}, scope=False), session={})
+        self.assertEqual(t.outcome, "escalate")
 
     def test_budget_exhausted_answers_all(self):
         llm = FakeLLM({"Техническая дирекция": "answer", "ДБРЦТ": "answer"})

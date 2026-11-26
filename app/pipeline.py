@@ -42,6 +42,8 @@ CLARIFY_FLOOR = 0.15      # документ считается «с опоро�
 CLARIFY_RATIO = 0.3
 DOC_WORDS = re.compile(r"документ|регламент|раздел|пункт|правил|описан|прописан|расписан|написан|указан|изложен|где\s+(у\s+нас\s+)?(про|найти|посмотреть|почитать)\b", re.I)  # q042: «откуда скачать эксель» — не «где описано»
 DOC_RATIO = 0.25           # «где описано»: документ называем, если его пункт не слабее четверти лучшего (q208 — 0,08; q206 — второй документ ИБ)
+import os as _os
+OFF = set(filter(None, _os.environ.get("HK_OFF", "").split(",")))   # выключить гипотезы для замера: HK_OFF=G1,G3
 OOS_SUPPORT = 0.5          # «вне регламентов» по разбору вопроса — только если в регламентах нет сильной опоры
 NO_SUPPORT = 0.05          # ниже — опоры нет (v1: 0.30, v2: 0.12 — терялись верные ответы; дальше решает verdict модели)
 
@@ -230,7 +232,7 @@ def needs_deep(res, support):
     return ""
 
 
-def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index, answer_cache, why):
+def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index, answer_cache, why, terms=""):
     """Агентный проход (идея владельца 26.11: слабые ответы — сразу через агента): добрать пункты, на которые ссылается
     текст, соседние пункты и пункты по недостающему, ответить второй раз и оставить лучший ответ."""
     have = {w["window_id"] for w in ws}
@@ -262,7 +264,7 @@ def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index,
     extra = [{**base, **w, "doc_title": w.get("doc_title") or base.get("doc_title", "")} for w in extra]
     ws2 = budget(sorted(ws + extra, key=lambda w: -w.get("score", 0)), max_windows=PER_DEPT + 6)
     ws2 = fit_tokens(llm, question, ws2, label_)
-    res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache)
+    res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache, terms)
     better = (VERDICT_RANK.get(res2["verdict"], 0), len(res2.get("steps", []))) > (VERDICT_RANK.get(res["verdict"], 0), len(res.get("steps", [])))
     return {"res": res2, "meta": meta2, "ws": ws2, "better": better, "added": len(extra), "why": why}
 
@@ -385,14 +387,14 @@ def fit_tokens(llm, q, ws, label_):
     return ws
 
 
-def cached_answer(llm, q, ws, label_, cache):
+def cached_answer(llm, q, ws, label_, cache, terms=""):
     if cache is None:
-        return llm_answer(llm, q, ws, label_)
-    k = cache.key("answer", norm_q(q), label_, tuple(w["window_id"] for w in ws))
+        return llm_answer(llm, q, ws, label_, terms)
+    k = cache.key("answer", norm_q(q), label_, tuple(w["window_id"] for w in ws), terms)
     hit = cache.get(k)
     if hit is not None:
         return hit[0], {**hit[1], "from_cache": True}
-    res, meta = llm_answer(llm, q, ws, label_)
+    res, meta = llm_answer(llm, q, ws, label_, terms)
     cache.put(k, (res, meta))
     return res, meta
 
@@ -449,6 +451,8 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer
     session.pop("_effective_q", None)
     session.pop("_conflicts", None)
     session.pop("_index", None)
+    if session.pop("_nc_turn", False):           # «не знаю дирекцию» — режим без уточнения только на этот ход
+        session.pop("no_clarify", None)
     t.tokens = c.t
     return t
 
@@ -573,7 +577,12 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     # исходная формулировка всегда в поиске: переписывание может увести в сторону (26.11: «заявка» → «РТЗ»)
     queries = list(dict.fromkeys([strip_departments(question, registry)] + [strip_departments(x, registry) for x in u["queries"]]))[:4]
     tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
-    named = mentioned(question, registry) or _docs_for(set(u.get("departments") or []), u.get("stage", ""), registry)
+    terms = "" if "G3" in OFF else "; ".join(queries[1:])
+    # Г2: сотрудник сам пишет, что не знает подразделение → не переспрашивать, ответы по всем (на этот ход)
+    if u.get("dept_unknown") and "G2" not in OFF and not session.get("no_clarify"):
+        session["no_clarify"] = session["_nc_turn"] = True
+        tr.append("Вы не знаете дирекцию — сравниваю ответы всех дирекций")
+    named = mentioned(question, registry) or _docs_for(set(u.get("departments") or []), "" if "G4" not in OFF else u.get("stage", ""), registry)
     if named:
         tr.append("Дирекция названа в вопросе")
     # названная в вопросе дирекция важнее выбранной ранее в диалоге (ревью Fable 26.11: «А в ДБРЦТ…» после выбора ТД
@@ -647,7 +656,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             tr.append("Пункт отсылает к документу, которого нет в базе, — называю его")
             return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: " + "; ".join(ext),
                         answers=results, trace=tr, hits=hits, external_refs=ext)
-        if not in_scope_llm(llm, question):
+        if (best < OOS_SUPPORT or "G1" in OFF) and not in_scope_llm(llm, question):
             tr.append("Ответа нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
             r = route_for(question)
             return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
@@ -729,7 +738,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         q = question + (COMPLEX_NOTE.format(dept=names.get(dep, dep)) if complex_ else "")
         ws = fit_tokens(llm, q, ws, names.get(dep, dep))
         try:
-            res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache)
+            res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache, terms)
         except Exception as e:             # сбой по одной дирекции не роняет весь ход (ревью Fable К12)
             res = {"verdict": "no_answer", "summary": "", "steps": [], "rejected": [], "caveat": "",
                    "missing": "ответ не получен из-за сбоя модели", "error": str(e)[:120]}
@@ -738,7 +747,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         if why:
             try:
                 d = deep_pass(llm, q, dep, names.get(dep, dep), ws, res, meta, search_fn,
-                              [x for x in deep if by_id[x]["department"] == dep], index, answer_cache, why)
+                              [x for x in deep if by_id[x]["department"] == dep], index, answer_cache, why, terms)
             except Exception as e:
                 d, meta["deep_error"] = None, str(e)[:120]
             if d:

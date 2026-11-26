@@ -32,16 +32,17 @@ def system_prompt(registry):
             "out_of_scope — вопрос не о процессах компании: экономика его конкретной сделки (какую маржу поставить, какая будет "
             "премия), текущие данные (сколько денег осталось сейчас), рынок, конкуренты, законы вообще, бытовое. "
             "vague=true — только если по вопросу нельзя понять, о каком процессе, документе или действии речь "
-            "(«а что с договором?», «как быть со сроками?»); конкретный вопрос — false, даже если ответа может не быть.")
+            "(«а что с договором?», «как быть со сроками?»); конкретный вопрос — false, даже если ответа может не быть. "
+            "dept_unknown=true — только если сотрудник сам пишет, что не знает, к какому подразделению относится его случай.")
 
 
 def schema(registry):
-    return {"type": "object", "additionalProperties": False, "required": ["queries", "departments", "stage", "vague", "intent"],
+    return {"type": "object", "additionalProperties": False, "required": ["queries", "departments", "stage", "vague", "intent", "dept_unknown"],
             "properties": {"queries": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "maxLength": 160}},
                            "departments": {"type": "array", "maxItems": 5 if len(dept_ids(registry)) <= MAX_LISTED_DEPTS else 0,
                                            "items": {"enum": dept_ids(registry)[:MAX_LISTED_DEPTS] or ["NONE"]}},
                            "stage": {"enum": ["presale", "project", ""]}, "vague": {"type": "boolean"},
-                           "intent": {"enum": INTENTS}}}
+                           "intent": {"enum": INTENTS}, "dept_unknown": {"type": "boolean"}}}
 
 
 def glossary():

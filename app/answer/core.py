@@ -13,6 +13,15 @@ from pathlib import Path
 
 PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 SYSTEM = (PROMPTS / "system_answer.md").read_text()
+# Г3 (26.11, разбор v2): модель держала ответ, когда слова вопроса не совпадали с терминами пункта
+MATCH_RULE = ("\n\nСопоставление слов. Сотрудники пишут разговорно, жаргоном, по-английски, с опечатками и пропусками букв. "
+              "Слова вопроса сопоставляй с терминами фрагментов по смыслу (действие, документ, роль, событие); строка "
+              "«Тот же вопрос словами регламента» — подсказка для этого. Если фрагмент по смыслу отвечает на вопрос — это ответ, "
+              "а не no_answer, даже если слов вопроса в нём нет. Цитаты, роли, сроки и условия — по-прежнему только дословно "
+              "из фрагментов; ничего не достраивай.")
+import os as _os
+if "G3" not in set(_os.environ.get("HK_OFF", "").split(",")):
+    SYSTEM += MATCH_RULE
 SCHEMA = json.loads((PROMPTS / "answer.schema.json").read_text())
 NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
@@ -22,12 +31,13 @@ def norm(s):
     return re.sub(r"\s+", " ", s).strip(" .;:")
 
 
-def build_user(question, windows, dept_label):
+def build_user(question, windows, dept_label, terms=""):
     parts = []
     for i, w in enumerate(windows, 1):
         where = ref_label(w) + ("" if w.get("kind") == "heading_section" else f" · раздел «{w['section_title']}»")
         parts.append(f"[w{i}] {w['department_name']} · {w['doc_title']} · {where}\n{w['text']}")
-    return f"Фрагменты регламентов:\n\n" + "\n\n".join(parts) + f"\n\nПодразделение: {dept_label}\n\nВопрос: {question}"
+    t = f"\nТот же вопрос словами регламента (подсказка для сопоставления, не факт): {terms}" if terms else ""
+    return f"Фрагменты регламентов:\n\n" + "\n\n".join(parts) + f"\n\nПодразделение: {dept_label}\n\nВопрос: {question}{t}"
 
 
 def _sentences(text):
@@ -255,6 +265,6 @@ def check(raw, windows, question=""):
     return out
 
 
-def answer(llm, question, windows, dept_label):
-    raw, meta = llm.chat_json(SYSTEM, build_user(question, windows, dept_label), SCHEMA)
+def answer(llm, question, windows, dept_label, terms=""):
+    raw, meta = llm.chat_json(SYSTEM, build_user(question, windows, dept_label, terms), SCHEMA)
     return check(raw, windows, question), meta
