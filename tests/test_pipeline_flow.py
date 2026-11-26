@@ -102,6 +102,10 @@ class VerdictFlowTest(unittest.TestCase):
     def test_find_doc_wider_and_external(self):
         self.assertTrue(FIND_DOC.search("В каких из доступных документов написано, что риски отражают в реестре?"))
         self.assertTrue(FIND_DOC.search("Где расписана специальная работа с подрядчиком?"))
+        self.assertFalse(FIND_DOC.search("Работы сданы. Какие закрывающие документы оформлять с клиентом?"))
+        for q in ["Какой документ описывает назначение TPS?", "В каком документе есть исключение RFI?",
+                  "Какие два документа отдельно описывают подготовку расчёта?", "Где найти правила риск-фонда?"]:
+            self.assertTrue(FIND_DOC.search(q), q)
         t = run_turn("ДБРЦТ: где расписана работа с подрядчиком?", REG, search_for(WINS), FakeLLM({}), session={})
         self.assertEqual(t.outcome, "external_ref")
 
