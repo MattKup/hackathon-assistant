@@ -76,4 +76,15 @@ class LLM:
         if "</think>" in content:
             content = content.split("</think>", 1)[1]
         meta["thinking"] = bool(thinking)
+        if thinking:
+            # Ночь 27.11: в 12 из 107 ответов (v3) рассуждение съедало бюджет и JSON не приходил («Expecting value»).
+            # Откат: тот же запрос без рассуждения — режим не должен давать отказ там, где обычный ответил бы.
+            try:
+                return json.loads(content.strip()), meta
+            except ValueError:
+                out, m2 = self.chat_json(system, user, schema, max_tokens=max_tokens, thinking=False)
+                m2.update({"thinking_fallback": True, "thinking_finish": meta["finish"],
+                           "seconds": round(meta["seconds"] + m2["seconds"], 3),
+                           "completion_tokens": (meta["completion_tokens"] or 0) + (m2["completion_tokens"] or 0)})
+                return out, m2
         return json.loads(content.strip()), meta
