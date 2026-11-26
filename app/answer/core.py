@@ -70,7 +70,8 @@ def check(raw, windows):
             w = windows[int(st["ref"][1:]) - 1]
             out["steps"].append({**st, "window_id": w["window_id"], "clause": w["clause"],
                                  "department": w["department"], "doc_title": w["doc_title"],
-                                 "source_text": w["text"], "section": w.get("section_title", "")})
+                                 "source_text": w["text"], "section": w.get("section_title", ""),
+                                 "external_refs": w.get("external_refs", [])})
     if raw.get("verdict") in ("answer", "answer_with_caveat", "conflict") and raw.get("steps") and not out["steps"]:
         out["verdict"] = "no_answer"
         out["downgraded"] = "все шаги без проверенной опоры"

@@ -18,10 +18,12 @@ from app.dialog.clarify import DEPT_ALIASES, decide, label, mentioned
 TASK_VERBS = re.compile(r"^\s*(?:пожалуйста,?\s*)?(сделай|напиши|составь|подготовь|проанализируй|переведи|сгенерируй|придумай|"
                         r"оформи|сформулируй|посчитай|нарисуй|разбери|собери|открой|запроси|выпиши|отправь|создай|заполни|"
                         r"сократи|перескажи мне|набросай|проверь мой|исправь)\b|\bза меня\b", re.I)
-FIND_DOC = re.compile(r"(как\w*|в как\w*)\s+(документ|регламент)\w*|где\s+(описан|прописан|найти|лежит|почитать)\w*|"
+# (7) шире: «в каких из доступных документов», «где расписана/написано/указано»
+FIND_DOC = re.compile(r"\b(как\w*|в\s+как\w*)(\s+[\w-]+){0,3}?\s+(документ|регламент)\w*|"
+                      r"\bгде(\s+[\w-]+){0,2}?\s+(описан|прописан|расписан|написан|указан|изложен|найти|лежит|почитать|посмотреть)\w*|"
                       r"\bкакие\s+(два|документы)\b", re.I)
 OUT_OF_SCOPE = re.compile(r"\b(как\w*\s+марж\w*\s+постав|марж\w*\s+(по|моей|на)\s|преми\w*|бонус\w*|kpi|курс\s+(доллар|евро|валют)\w*|"
-                          r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*)", re.I)
+                          r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*|постав\w*\s+марж\w*\s+\d|марж\w*\s+\d+\s*%\s+или)", re.I)
 DEPT_NAMES = {"TECH": "Техническая дирекция", "IB": "Дирекция ИБ", "DBRCT": "ДБРЦТ"}
 PER_DOC = 16      # фрагментов на документ после слияния запросов
 PER_DEPT = 18     # фрагментов на дирекцию в контексте модели (документы маленькие, контекст позволяет)
@@ -36,7 +38,8 @@ SCOPE_SYSTEM = ("Ты классифицируешь вопрос сотрудн
                 "in_scope=true, если вопрос о том, как устроены эти процессы в компании (даже если ответа может не быть); "
                 "Вопросы о правилах, сроках, порогах, санкциях, контактах, ролях и процедурах компании — in_scope, даже если "
                 "ответа в регламентах может не быть. false — только если вопрос о другом: экономика конкретной сделки сотрудника "
-                "(какую маржу поставить, какая будет премия), рынок и конкуренты, законы вообще, бытовое.")
+                "(какую маржу поставить, какая будет премия), текущие данные конкретной сделки или проекта (сколько денег осталось "
+                "сейчас, какой статус у моей заявки), рынок и конкуренты, законы вообще, бытовое.")
 SCOPE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["in_scope"],
                 "properties": {"in_scope": {"type": "boolean"}}}
 
@@ -52,6 +55,23 @@ class Turn:
     hits: list = field(default_factory=list)
     documents: list = field(default_factory=list)     # для «где регламент»: [{title, label, sections}]
     external_refs: list = field(default_factory=list)
+
+
+COMPLEX_NOTE = ("\n\n(Это комплексный проект нескольких дирекций. Ответь для части работ, которую ведёт {dept}, по её регламенту. "
+                "То, что в регламенте нет правил о совместных проектах или о других дирекциях, — не причина для no_answer.)")
+
+
+def in_scope_llm(llm, question):
+    try:
+        sc, _ = llm.chat_json(SCOPE_SYSTEM, question, SCOPE_SCHEMA, max_tokens=20)
+        return bool(sc.get("in_scope", True))
+    except Exception:
+        return True
+
+
+def cited_refs(results):
+    """(6) Внешние документы — только из пунктов, на которые опирается ответ."""
+    return sorted({ref for r in results for st in r["result"].get("steps", []) for ref in st.get("external_refs", [])})
 
 
 def plural(n, one, few, many):
@@ -91,7 +111,7 @@ def _docs_for(depts, stage, registry):
 
 def run_turn(question, registry, search_fn, llm, session=None, workers=4):
     """search_fn(query, allowed) -> hits (score реранкера). session: {'docs': [...], 'clarifications': n}."""
-    session = session or {}
+    session = {} if session is None else session      # мутируется: кэш ответов для второго хода
     tr = []
     if TASK_VERBS.search(question):
         tr.append("Это просьба выполнить работу, а не вопрос по регламентам — отказ")
@@ -101,6 +121,18 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         tr.append("Вопрос не про регламенты — подсказываю, куда обратиться")
         r = route_for(question)
         return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr)
+
+    by_id = {x["doc_id"]: x for x in registry}
+    cache = session.get("cache")
+    if cache and cache["q"] == question and session.get("docs"):
+        chosen = {by_id[d]["department"] for d in session["docs"] if d in by_id}
+        cached = [cache["answers"][d] for d in cache["order"] if d in chosen]
+        if cached and chosen <= set(cache["answers"]):
+            tr.append("Ответы по дирекциям уже готовы — показываю " + ("выбранную" if len(cached) == 1 else "выбранные"))
+            hits = cache["hits"]
+            verdicts = [r["result"]["verdict"] for r in cached]
+            outcome = "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
+            return Turn(outcome, answers=cached, trace=tr, hits=hits, external_refs=cited_refs(cached))
 
     # 1. понять вопрос (агентный шаг)
     u, _ = understand(llm, question)
@@ -130,15 +162,31 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
     hits = sorted([h for hs in per_doc.values() for h in hs], key=lambda h: -h["score"])
     best = hits[0]["score"] if hits else 0
     tr.append(f"Искал в {len(scope)} {plural(len(scope), 'регламенте', 'регламентах', 'регламентах')} по {len(queries)} {plural(len(queries), 'формулировке', 'формулировкам', 'формулировкам')}")
-    by_id = {x["doc_id"]: x for x in registry}
+
+    def escalate_or_scope(results):
+        """(4) Перед письмом — проверка «вопрос вообще про процессы компании?»."""
+        ext = sorted(set(hits[0].get("external_refs", []))) if hits else []   # (6) только лучший пункт, не вся выдача
+        if ext:
+            tr.append("Пункт отсылает к документу, которого нет в базе, — называю его")
+            return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: " + "; ".join(ext),
+                        answers=results, trace=tr, hits=hits, external_refs=ext)
+        if not in_scope_llm(llm, question):
+            tr.append("Ответа нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
+            r = route_for(question)
+            return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
+        tr.append("В найденных пунктах ответа нет — отправляю вопрос в службу качества")
+        return Turn("escalate", "В регламентах прямого ответа нет. Я отправил вопрос в службу качества, вы в копии.",
+                    route={"to": "служба качества", "email": True}, answers=results, trace=tr, hits=hits)
+
+    def _finish(results, note=""):
+        verdicts = [r["result"]["verdict"] for r in results]
+        if all(v == "no_answer" for v in verdicts):
+            return escalate_or_scope(results)
+        outcome = "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
+        return Turn(outcome, note, answers=results, trace=tr, hits=hits, external_refs=cited_refs(results))
 
     if best < NO_SUPPORT:
-        try:
-            sc, _ = llm.chat_json(SCOPE_SYSTEM, question, SCOPE_SCHEMA, max_tokens=20)
-            in_scope = bool(sc.get("in_scope", True))
-        except Exception:
-            in_scope = True
-        if not in_scope:
+        if not in_scope_llm(llm, question):
             tr.append("Подходящих пунктов нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
             r = route_for(question)
             return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
@@ -147,6 +195,11 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
                     route={"to": "служба качества", "email": True}, trace=tr, hits=hits)
 
     if FIND_DOC.search(question):
+        if hits[0].get("external_refs"):
+            ext = sorted(set(hits[0]["external_refs"]))
+            tr.append(f"Вопрос о том, где описано; лучший пункт ({hits[0]['clause']}) отсылает к документу, которого нет в базе")
+            return Turn("external_ref", f"Пункт {hits[0]['clause']} отсылает к отдельному документу, которого нет в базе ассистента: "
+                        + "; ".join(ext), trace=tr, hits=hits, external_refs=ext)
         docs_found = []
         for h in hits[:6]:
             if h["doc_id"] not in [d["doc_id"] for d in docs_found] and h["doc_id"] in by_id:
@@ -159,25 +212,21 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         tr.append(f"Вопрос о том, где описано, — нашёл {len(docs_found)} {plural(len(docs_found), 'документ', 'документа', 'документов')}")
         return Turn("document", "Это описано здесь:", documents=docs_found, trace=tr, hits=hits)
 
-    # 3. уточнять ли дирекцию — по лучшему скору документов каждой дирекции (стадию система выбирает сама)
+    # 3. дирекции, для которых готовим ответ: названные/выбранные или все, где есть опора (стадию система выбирает сама)
     dept_best = {}
     for d, hs in per_doc.items():
         if hs:
             dep = by_id[d]["department"]
             dept_best[dep] = max(dept_best.get(dep, 0), hs[0]["score"])
-    if session.get("docs") or named:
+    fixed = bool(session.get("docs") or named)
+    if fixed:
         depts = sorted({by_id[d]["department"] for d in scope}, key=lambda x: -dept_best.get(x, 0))
         tr.append("Дирекция " + ("выбрана вами" if session.get("docs") else "названа в вопросе"))
     else:
-        floor = max(CLARIFY_FLOOR, CLARIFY_RATIO * best)
-        depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= floor]
-        tr.append(f"Порядок есть в регламентах {len(depts)} {plural(len(depts), 'дирекции', 'дирекций', 'дирекций')}" + (" и отличается — уточняю дирекцию" if len(depts) >= 2 else ""))
-        if len(depts) >= 2 and session.get("clarifications", 0) < 2:
-            opts = [{"doc_id": dep, "department": dep, "label": DEPT_NAMES.get(dep, dep)} for dep in depts]
-            return Turn("clarify", "Ответ зависит от дирекции. Какая дирекция ведёт проект?",
-                        options=opts + [{"doc_id": "*", "label": "Проект нескольких дирекций"}, {"doc_id": "?", "label": "Не знаю"}],
-                        trace=tr, hits=hits)
-        depts = depts[:1] or [by_id[hits[0]["doc_id"]]["department"]]
+        depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= NO_SUPPORT]
+        tr.append(f"Готовлю ответ по каждой дирекции, где нашлись пункты: {len(depts)}")
+    # (2) комплексный проект: каждая дирекция отвечает за свою часть
+    complex_ = len(depts) >= 2 and (session.get("complex") or len({by_id[d]["department"] for d in named}) >= 2)
 
     # 4. ответ по каждой дирекции — параллельно; окна из всех её документов (пресейл/проект — внутри)
     def one(dep):
@@ -188,7 +237,8 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
                 ws.append({**w, "department_name": DEPT_NAMES.get(dep, dep),
                            "doc_title": "Практика службы качества" if w.get("kind") == "practice" else doc["display_title"]})
         ws = sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"])[:PER_DEPT]
-        res, meta = llm_answer(llm, question, ws, DEPT_NAMES.get(dep, dep))
+        q = question + (COMPLEX_NOTE.format(dept=DEPT_NAMES.get(dep, dep)) if complex_ else "")
+        res, meta = llm_answer(llm, q, ws, DEPT_NAMES.get(dep, dep))
         meta["clauses_seen"] = [w["clause"] for w in ws]
         return {"doc_id": dep, "label": DEPT_NAMES.get(dep, dep), "result": res, "meta": meta}
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -201,15 +251,20 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         tr.append(f"{r['label']}: {verdict}" + (f", {n} {plural(n, 'шаг', 'шага', 'шагов')} со ссылками на пункты" if n else "")
                   + (f"; {rej} {plural(rej, 'утверждение отброшено', 'утверждения отброшены', 'утверждений отброшено')} проверкой цитат" if rej else "; все цитаты сверены с текстом"))
         r["meta"]["trace_debug"] = f"пункты в контексте: {', '.join(r['meta'].get('clauses_seen', []))}"
-    verdicts = [r["result"]["verdict"] for r in results]
-    ext = sorted({ref for h in hits[:5] for ref in h.get("external_refs", [])})
-    if all(v == "no_answer" for v in verdicts) and ext:
-        tr.append("Пункт отсылает к документу, которого нет в базе, — называю его")
-        return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: " + "; ".join(ext),
-                    answers=results, trace=tr, hits=hits, external_refs=ext)
-    if all(v == "no_answer" for v in verdicts):
-        tr.append("В найденных пунктах ответа нет — отправляю вопрос в службу качества")
-        return Turn("escalate", "В регламентах прямого ответа нет. Я отправил вопрос в службу качества, вы в копии.",
-                    route={"to": "служба качества", "email": True}, answers=results, trace=tr, hits=hits)
-    outcome = "conflict" if "conflict" in verdicts else ("answer_with_caveat" if "answer_with_caveat" in verdicts else "answer")
-    return Turn(outcome, answers=results, trace=tr, hits=hits, external_refs=ext)
+    if fixed:
+        return _finish(results)
+
+    # 5. решение об уточнении — по verdict модели (разбор v4, исправление 1)
+    answered = [r for r in results if r["result"]["verdict"] != "no_answer"]
+    silent = [DEPT_NAMES.get(d, d) for d in DEPT_NAMES if d not in {r["doc_id"] for r in answered}]
+    note = ("В регламентах " + (", ".join(silent[:-1]) + " и " + silent[-1] if len(silent) > 1 else silent[0])
+            + " об этом не сказано.") if answered and silent else ""
+    if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
+        session["cache"] = {"q": question, "answers": {r["doc_id"]: r for r in answered}, "order": [r["doc_id"] for r in answered],
+                            "hits": hits[:5]}
+        tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и отличается — уточняю дирекцию")
+        opts = [{"doc_id": r["doc_id"], "department": r["doc_id"], "label": r["label"]} for r in answered]
+        return Turn("clarify", "Ответ зависит от дирекции. Какая дирекция ведёт проект?",
+                    options=opts + [{"doc_id": "*", "label": "Проект нескольких дирекций"}, {"doc_id": "?", "label": "Не знаю"}],
+                    trace=tr, hits=hits)
+    return _finish(answered or results, note)

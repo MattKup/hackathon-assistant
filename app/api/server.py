@@ -153,8 +153,10 @@ class App:
         return self.hy.search(q, k=16, allowed=allowed)[0]
 
     # --- ход диалога ---
-    def ask(self, sid, question, choice=None, employee=""):
+    def ask(self, sid, question, choice=None, employee="", no_clarify=None):
         s = self.sessions.setdefault(sid, {"docs": [], "clarifications": 0, "history": [], "pending": None})
+        if no_clarify is not None:
+            s["no_clarify"] = bool(no_clarify)      # режим «без уточнения дирекции»: сразу ответы по всем дирекциям
         q = question
         if choice is not None and s["pending"]:
             q = s["pending"]
@@ -163,8 +165,12 @@ class App:
             chosen = depts if choice in ("?", "*") else [c for c in choice.split(",") if c]
             s["docs"] = [d["doc_id"] for d in self.registry if d["department"] in chosen]
             s["clarifications"] += 1
+            s["complex"] = choice == "*" or "," in choice
+        elif q:
+            s["complex"] = False
+            s.pop("cache", None)
         t0 = time.time()
-        turn = run_turn(q, self.registry, self.search, self.llm, session={"docs": s["docs"], "clarifications": s["clarifications"]})
+        turn = run_turn(q, self.registry, self.search, self.llm, session=s)   # s хранит кэш ответов по дирекциям для второго хода
         out = {"outcome": turn.outcome, "text": turn.text, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
                "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": []}
@@ -289,7 +295,7 @@ def make_handler(app):
             try:
                 if self.path == "/api/ask":
                     sid = b.get("session") or uuid.uuid4().hex
-                    out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""))
+                    out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""), b.get("no_clarify"))
                     out["session"] = sid
                     return self._json(200, out)
                 if self.path == "/api/admin/reset-demo":   # очистить обращения, карточки, журнал (демо)
@@ -337,6 +343,7 @@ def main():
     ap.add_argument("--data", default="data/app")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--mock", action="store_true")
+    ap.add_argument("--host", default="127.0.0.1", help="адрес прослушивания (наружу — только через Caddy)")
     ap.add_argument("--poll", type=int, default=15, help="опрос почты СК, секунд (0 — выкл.)")
     a = ap.parse_args()
     app = App(a.corpus, Path(a.data), a.mock)
@@ -350,7 +357,7 @@ def main():
                     pass
         threading.Thread(target=loop, daemon=True).start()
     print(f"assistant on :{a.port} mock={a.mock} windows={len(app.windows)}", flush=True)
-    ThreadingHTTPServer(("0.0.0.0", a.port), make_handler(app)).serve_forever()
+    ThreadingHTTPServer((a.host, a.port), make_handler(app)).serve_forever()
 
 
 if __name__ == "__main__":

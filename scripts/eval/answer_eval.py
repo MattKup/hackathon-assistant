@@ -1,7 +1,14 @@
 """Прогон эталона на стенде: первый ход по каждому вопросу (+ второй ход для clarify: выбор первого
 ожидаемого подразделения). Пишет answers.jsonl (полные ответы — для судьи) и metrics.json.
 
-Аргументы: <папка корпуса в INBOX_DIR> <eval.jsonl в INBOX_DIR> [лимит]
+Аргументы: <папка корпуса в INBOX_DIR> <eval.jsonl в INBOX_DIR> [лимит] [--no-clarify]
+
+Режимы (решение владельца 26.11 — жюри может не нажимать кнопки):
+  clarify (по умолчанию) — ассистент уточняет дирекцию, если ответ есть в ≥ 2 дирекциях; второй ход из кэша сессии;
+  --no-clarify — флаг сессии no_clarify: сразу ответы по всем дирекциям; вопрос, где эталон ждёт уточнения,
+  засчитывается, если дан ответ по ≥ 2 дирекциям (а для уточнения стадии ИБ — ответ с пунктами обоих документов ИБ).
+Уточнение стадии ИБ (clarify_dimension=stage, напр. q091/q093/q095): стадию выбирает система — ответ, где
+процитированы пункты обоих документов ИБ (пресейл и проект), засчитывается в обоих режимах (решение 26.11).
 """
 import json
 import os
@@ -26,7 +33,23 @@ EXPECT = {"answer": {"answer", "answer_with_caveat"}, "clarify": {"clarify"},
           "document": {"document"}}
 
 
-def main(corpus_rel, eval_rel, limit=None):
+ANSWERED = {"answer", "answer_with_caveat", "conflict"}
+
+
+def answered_depts(t):
+    return [a["label"] for a in t.answers if a["result"]["verdict"] != "no_answer"]
+
+
+def both_ib_stages(t, docs):
+    ib = {d["display_title"]: d["stage"] for d in docs if d["department"] == "IB"}
+    cited = {ib[s["doc_title"]] for a in t.answers for s in a["result"]["steps"] if s.get("doc_title") in ib}
+    return {"presale", "project"} <= cited
+
+
+def main(corpus_rel, eval_rel, *rest):
+    no_clarify = "--no-clarify" in rest
+    rest = [r for r in rest if not r.startswith("--")]
+    limit = rest[0] if rest else None
     inbox, run_dir = Path(os.environ["INBOX_DIR"]), Path(os.environ.get("RUN_DIR", "."))
     docs, wins = build_registry(inbox / corpus_rel, ROOT / "data" / "stand")
     windows = [w.to_dict() for w in wins]
@@ -46,7 +69,8 @@ def main(corpus_rel, eval_rel, limit=None):
             q = e["question"]
             t0 = time.time()
             try:
-                t1 = run_turn(q, docs, search, llm)
+                sess = {"no_clarify": no_clarify}
+                t1 = run_turn(q, docs, search, llm, session=sess)
                 row = {"id": e["id"], "class": e["class"], "question": q, "turn1": turn_dict(t1)}
                 exp = e["expected"]["outcome"]
                 ok = t1.outcome in EXPECT.get(exp, {exp})
@@ -54,16 +78,25 @@ def main(corpus_rel, eval_rel, limit=None):
                     row["extra_clarify"] = True          # лишнее уточнение: считаем отдельно
                 if e["class"] == "complex_project":
                     ok = ok and len(t1.answers) >= 2
+                stage_q = e["expected"].get("clarify_dimension") == "stage"
+                if stage_q and t1.outcome in ANSWERED and both_ib_stages(t1, docs):
+                    ok = True
+                    row["stage_both"] = True
+                if no_clarify and exp in ("clarify", "compare_all") and not stage_q:
+                    ok = t1.outcome in ANSWERED and len(answered_depts(t1)) >= 2
+                row["answered_depts"] = answered_depts(t1)
                 row["outcome_ok"] = ok
                 if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
                     alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
-                    t2 = run_turn(q, docs, search, llm, session={"docs": alld, "clarifications": 1})
+                    sess.update(docs=alld, clarifications=1)
+                    t2 = run_turn(q, docs, search, llm, session=sess)
                     row["turn2_choice"] = "не знаю → все варианты"
                     row["turn2"] = turn_dict(t2)
                     row["outcome_ok"] = ok = ok and len(t2.answers) >= 2
                 elif t1.outcome == "clarify" and e["expected"].get("clarify_options"):
                     dep = e["expected"]["clarify_options"][0]
-                    t2 = run_turn(q, docs, search, llm, session={"docs": dept_doc.get(dep, []), "clarifications": 1})
+                    sess.update(docs=dept_doc.get(dep, []), clarifications=1)
+                    t2 = run_turn(q, docs, search, llm, session=sess)
                     row["turn2_choice"] = dep
                     row["turn2"] = turn_dict(t2)
                 exp_clauses = {c["clause"] for v in (e["expected"].get("by_department") or {}).values() for c in v["citations"]}
@@ -83,7 +116,7 @@ def main(corpus_rel, eval_rel, limit=None):
             print(e["id"], e["class"], row.get("turn1", {}).get("outcome"), row["outcome_ok"], row["seconds"], flush=True)
     times.sort()
     classes = sorted({c for c, _ in by_class})
-    m = {"questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
+    m = {"mode": "no_clarify" if no_clarify else "clarify", "questions": len(items), "outcome_ok": stats["ok"], "outcome_bad": stats["bad"], "errors": stats["errors"],
          "cite_hit": stats["cite_hit"], "cite_miss": stats["cite_miss"], "extra_clarify": stats["extra_clarify"],
          "by_class": {c: f"{by_class[(c, True)]}/{by_class[(c, True)] + by_class[(c, False)]}" for c in classes},
          "p50_s": times[len(times) // 2] if times else None, "p95_s": times[max(0, int(len(times) * .95) - 1)] if times else None}

@@ -311,7 +311,7 @@ function render(r){
       `<button class="chip ghost" data-multi="1">Проект нескольких дирекций</button><button class="chip ghost" data-choice="?" data-label="Не знаю">Не знаю</button></div>
       <div class="chips hide multi">${opts.map(o => `<label class="chip"><input type="checkbox" value="${o.id}"> ${esc(o.label)}</label>`).join("")}<button class="btn" data-multigo="1">Ответить по выбранным</button></div>`;
   } else if (["answer","answer_with_caveat","conflict","external_ref"].includes(r.outcome) && r.answers.length) {
-    const many = r.answers.length > 1, used = [];
+    const many = r.answers.length > 1 || !!r.text, used = [];
     for (const a of r.answers) {
       h += `<div class="dept">` + (many ? `<h4>${esc(a.label)}</h4>` : "");
       if (a.verdict === "no_answer") { h += `<p class="meta">В регламентах этой дирекции прямого ответа нет.</p></div>`; continue; }
@@ -322,6 +322,7 @@ function render(r){
       if (a.caveat) h += `<div class="caveat">⚠︎ <span>${esc(a.caveat)}</span></div>`;
       h += `</div>`;
     }
+    if (r.text) h += `<p class="meta">${esc(r.text)}</p>`;
     if (r.outcome === "conflict") h += `<div class="caveat">⚠︎ <span>В регламентах противоречие — ответ требует подтверждения службы качества.</span></div>`;
     if (r.external_refs?.length) h += `<div class="note">Подробный порядок описан в документе, которого нет в базе помощника: ${r.external_refs.map(esc).join("; ")}</div>`;
     const uniq = {}; used.forEach(n => { const s = notes[n-1]; const k = s.practice ? "practice" : s.doc_title + "|" + s.clause; (uniq[k] ||= {s, ns:[]}).ns.push(n); });
