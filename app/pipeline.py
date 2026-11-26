@@ -23,6 +23,8 @@ FIND_DOC = re.compile(r"(как\w*|в как\w*)\s+(документ|регла�
 OUT_OF_SCOPE = re.compile(r"\b(как\w*\s+марж\w*\s+постав|марж\w*\s+(по|моей|на)\s|преми\w*|бонус\w*|kpi|курс\s+(доллар|евро|валют)\w*|"
                           r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*)", re.I)
 DEPT_NAMES = {"TECH": "Техническая дирекция", "IB": "Дирекция ИБ", "DBRCT": "ДБРЦТ"}
+PER_DOC = 16      # фрагментов на документ после слияния запросов
+PER_DEPT = 18     # фрагментов на дирекцию в контексте модели (документы маленькие, контекст позволяет)
 CLARIFY_FLOOR = 0.15      # документ считается «с опорой», если его лучший скор ≥ max(FLOOR, RATIO × лучший общий)
 CLARIFY_RATIO = 0.3
 NO_SUPPORT = 0.05          # ниже — опоры нет (v1: 0.30, v2: 0.12 — терялись верные ответы; дальше решает verdict модели)
@@ -105,12 +107,17 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
 
     # 2. поиск по каждому документу и каждому запросу — параллельно
     def doc_hits(doc_id):
-        best = {}
+        """Слияние выдач по запросам: RRF по рангам (а не максимум скора) — пункт, лучший для одного
+        из запросов, не вытесняется пунктами с высоким скором по другим (26.11: ДБРЦТ п. 1.5)."""
+        best, rrf = {}, {}
         for qq in queries:
-            for h in search_fn(qq, {doc_id}):
-                if h["window_id"] not in best or h["score"] > best[h["window_id"]]["score"]:
-                    best[h["window_id"]] = h
-        return doc_id, sorted(best.values(), key=lambda h: -h["score"])[:12]
+            for r, h in enumerate(search_fn(qq, {doc_id})):
+                wid = h["window_id"]
+                rrf[wid] = rrf.get(wid, 0) + 1 / (10 + r)
+                if wid not in best or h["score"] > best[wid]["score"]:
+                    best[wid] = h
+        order = sorted(best, key=lambda w: -rrf[w])[:PER_DOC]
+        return doc_id, sorted((best[w] for w in order), key=lambda h: -h["score"])
     with ThreadPoolExecutor(max_workers=workers) as ex:
         per_doc = dict(ex.map(doc_hits, scope))
     hits = sorted([h for hs in per_doc.values() for h in hs], key=lambda h: -h["score"])
@@ -173,7 +180,7 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
             for w in per_doc.get(d) or doc_hits(d)[1]:
                 ws.append({**w, "department_name": DEPT_NAMES.get(dep, dep),
                            "doc_title": "Практика службы качества" if w.get("kind") == "practice" else doc["display_title"]})
-        ws = sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"])[:12]
+        ws = sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"])[:PER_DEPT]
         res, meta = llm_answer(llm, question, ws, DEPT_NAMES.get(dep, dep))
         meta["clauses_seen"] = [w["clause"] for w in ws]
         return {"doc_id": dep, "label": DEPT_NAMES.get(dep, dep), "result": res, "meta": meta}
