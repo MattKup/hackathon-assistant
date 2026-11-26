@@ -212,8 +212,8 @@ nav button{padding:7px 10px}
       <div class="fname" id="fname">Перетащите файл сюда</div>
       <div class="meta">DOCX, PDF, PNG, JPEG, TIFF · до 50 МБ</div>
       <div class="row1"><label class="pick" for="upFile">📎 Выбрать файл</label>
-        <input class="pill" name="department" list="deptList" value="TECH" title="Код подразделения: выберите или введите новый" style="width:150px"><datalist id="deptList"><option value="TECH">Техническая дирекция</option><option value="IB">Дирекция ИБ</option><option value="DBRCT">ДБРЦТ</option></datalist>
-        <select class="pill" name="stage"><option value="full_cycle">Пресейл и проект</option><option value="presale">Пресейл</option><option value="project">Проект</option></select>
+        <label class="meta" style="display:flex;flex-direction:column;gap:2px">Подразделение (выберите или впишите новое)<input class="pill" name="department" list="deptList" value="TECH" title="Код подразделения: выберите или введите новый" style="width:150px"><datalist id="deptList"><option value="TECH">Техническая дирекция</option><option value="IB">Дирекция ИБ</option><option value="DBRCT">ДБРЦТ</option></datalist></label>
+        <label class="meta" style="display:flex;flex-direction:column;gap:2px">Какие этапы сделки описывает<select class="pill" name="stage" title="Нужно, если у подразделения отдельные регламенты на пресейл и на реализацию проекта (как у Дирекции ИБ)"><option value="full_cycle">Весь цикл: пресейл и реализация</option><option value="presale">Только пресейл</option><option value="project">Только реализацию проекта</option></select></label>
         <button class="btn">Загрузить и распознать</button></div>
       <span class="meta" id="upMsg"></span>
     </form></div>
