@@ -175,11 +175,13 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
                            "doc_title": "Практика службы качества" if w.get("kind") == "practice" else doc["display_title"]})
         ws = sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"])[:10]
         res, meta = llm_answer(llm, question, ws, DEPT_NAMES.get(dep, dep))
+        meta["clauses_seen"] = [w["clause"] for w in ws]
         return {"doc_id": dep, "label": DEPT_NAMES.get(dep, dep), "result": res, "meta": meta}
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
     for r in results:
-        tr.append(f"ответ {r['label']}: {r['result']['verdict']}, шагов {len(r['result']['steps'])}, отклонено {len(r['result']['rejected'])}")
+        tr.append(f"ответ {r['label']}: {r['result']['verdict']}, шагов {len(r['result']['steps'])}, отклонено {len(r['result']['rejected'])}; "
+                  f"пункты: {', '.join(r['meta'].get('clauses_seen', [])[:10])}")
     verdicts = [r["result"]["verdict"] for r in results]
     ext = sorted({ref for h in hits[:5] for ref in h.get("external_refs", [])})
     if all(v == "no_answer" for v in verdicts) and ext:
