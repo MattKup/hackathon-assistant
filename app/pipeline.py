@@ -153,8 +153,8 @@ def apply_conflicts(results, conflicts, tr, question=""):
     out = []
     for r in results:
         res = r["result"]
-        if res["verdict"] == "no_answer":
-            out.append(r)
+        if res["verdict"] == "no_answer" or any((st.get("doc_title") or "").startswith("Практика") for st in res.get("steps", [])):
+            out.append(r)            # ответ по практике СК: у неё приоритет над регламентом (организаторы 26.11) — пара уже разрешена
             continue
         hits = []
         for st in res.get("steps", []):

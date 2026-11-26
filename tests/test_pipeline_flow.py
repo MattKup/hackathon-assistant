@@ -441,3 +441,17 @@ class ConflictRegistryTest(unittest.TestCase):
         t = run_turn("ДБРЦТ: за сколько подавать заявку?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}), session={}, conflicts=c)
         self.assertEqual(t.outcome, "conflict")
         self.assertIn("DBRCT:1.5↔1.6", t.route["why"])
+
+
+class PracticePriorityTest(unittest.TestCase):
+    """Организаторы 26.11: при расхождении ответа СК и регламента приоритет у службы качества — пара противоречия
+    не срабатывает, если ответ опирается на практику СК."""
+    def test_practice_answer_not_flagged_conflict(self):
+        from app.pipeline import apply_conflicts
+        conf = {("dbr", "1.5"): [{"clause": "1.6", "why": "разные сроки", "text": "т", "pair": "DBRCT:1.5↔1.6"}]}
+        res = {"verdict": "answer", "steps": [{"doc_id": "dbr", "clause": "1.5", "doc_title": "Практика службы качества"}]}
+        out = apply_conflicts([{"label": "ДБРЦТ", "result": res}], conf, [], "за сколько подавать заявку сроки")
+        self.assertEqual(out[0]["result"]["verdict"], "answer")
+        res2 = {"verdict": "answer", "steps": [{"doc_id": "dbr", "clause": "1.5", "doc_title": "Регламент ДБРЦТ"}]}
+        out = apply_conflicts([{"label": "ДБРЦТ", "result": res2}], conf, [], "за сколько подавать заявку сроки разные")
+        self.assertEqual(out[0]["result"]["verdict"], "conflict")
