@@ -1,0 +1,4 @@
+# Образ ассистента: python 3.12 + numpy (ускоритель плотного поиска на большой базе; код остальное — stdlib).
+# Версии зафиксированы: python 3.12.15-slim-bookworm (21.10.2026), numpy 2.2.6 (май 2025, колёса для 3.12 linux x86_64).
+FROM python:3.12.15-slim-bookworm
+RUN pip install --no-cache-dir numpy==2.2.6

@@ -15,7 +15,10 @@ services:
     volumes:
       - ../../data/mailpit:/data
   assistant:
-    image: python:3.12.15-slim-bookworm     # вышел 21.10.2026; код — только stdlib
+    image: hackathon-assistant:py312-numpy2.2.6
+    build:                                   # python 3.12.15-slim + numpy 2.2.6 (ускоритель поиска на большой базе)
+      context: .
+      dockerfile: Dockerfile.assistant
     network_mode: host
     restart: unless-stopped
     working_dir: /app
