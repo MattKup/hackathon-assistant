@@ -11,3 +11,4 @@ inbox/
 corpus/
 node_modules/
 ui/dist/
+.claude/

@@ -1,15 +1,40 @@
 {
   "_comment": "Правила метаданных документа по имени файла (первое совпадение). department — подразделение, stage — стадия: presale | project | full_cycle (пресейл и проект в одном документе).",
   "rules": [
-    {"match": "Пресейлов", "department": "IB", "stage": "presale"},
-    {"match": "Дирекции ИБ", "department": "IB", "stage": "project"},
-    {"match": "ДБРЦТ", "department": "DBRCT", "stage": "full_cycle"},
-    {"match": "Тех дирекц", "department": "TECH", "stage": "full_cycle"}
+    {
+      "match": "Пресейлов",
+      "department": "IB",
+      "stage": "presale"
+    },
+    {
+      "match": "Дирекции ИБ",
+      "department": "IB",
+      "stage": "project"
+    },
+    {
+      "match": "ДБРЦТ",
+      "department": "DBRCT",
+      "stage": "full_cycle"
+    },
+    {
+      "match": "Тех дирекц",
+      "department": "TECH",
+      "stage": "full_cycle"
+    }
   ],
   "departments": {
-    "IB": "Дирекция информационной безопасности (ИБ)",
-    "DBRCT": "ДБРЦТ (Департамент бизнес-решений и цифровой трансформации)",
-    "TECH": "Техническая дирекция"
+    "IB": "Дирекция ИБ",
+    "DBRCT": "ДБРЦТ",
+    "TECH": "Тех дирекция"
   },
-  "stages": {"presale": "пресейл", "project": "проект", "full_cycle": "пресейл и проект"}
+  "stages": {
+    "presale": "пресейл",
+    "project": "проект",
+    "full_cycle": "пресейл и проект"
+  },
+  "departments_full": {
+    "IB": "Дирекция информационной безопасности",
+    "DBRCT": "Департамент бизнес-решений и цифровой трансформации",
+    "TECH": "Техническая дирекция"
+  }
 }

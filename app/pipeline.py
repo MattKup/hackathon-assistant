@@ -119,7 +119,8 @@ def run_turn(question, registry, search_fn, llm, session=None):
     for doc_id in docs:
         ws = search_fn(q_doc, {doc_id})[:8]          # отдельный поиск внутри документа подразделения
         doc = by_id[doc_id]
-        ws = [{**w, "department_name": label(doc, registry), "doc_title": doc["display_title"]} for w in ws]
+        ws = [{**w, "department_name": label(doc, registry),
+               "doc_title": "Практика службы качества" if w.get("kind") == "practice" else doc["display_title"]} for w in ws]
         res, meta = llm_answer(llm, question, ws, label(doc, registry))
         results.append({"doc_id": doc_id, "label": label(doc, registry), "result": res, "meta": meta})
         tr.append(f"ответ {label(doc, registry)}: {res['verdict']}, шагов {len(res['steps'])}, отклонено {len(res['rejected'])}")
