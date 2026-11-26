@@ -22,6 +22,7 @@ FIND_DOC = re.compile(r"(как\w*|в как\w*)\s+(документ|регла�
                       r"\bкакие\s+(два|документы)\b", re.I)
 OUT_OF_SCOPE = re.compile(r"\b(как\w*\s+марж\w*\s+постав|марж\w*\s+(по|моей|на)\s|преми\w*|бонус\w*|kpi|курс\s+(доллар|евро|валют)\w*|"
                           r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*)", re.I)
+DEPT_NAMES = {"TECH": "Техническая дирекция", "IB": "Дирекция ИБ", "DBRCT": "ДБРЦТ"}
 CLARIFY_FLOOR = 0.15      # документ считается «с опорой», если его лучший скор ≥ max(FLOOR, RATIO × лучший общий)
 CLARIFY_RATIO = 0.3
 NO_SUPPORT = 0.05          # ниже — опоры нет (v1: 0.30, v2: 0.12 — терялись верные ответы; дальше решает verdict модели)
@@ -143,32 +144,39 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4):
         tr.append(f"тип: где регламент → {len(docs_found)} документ(а)")
         return Turn("document", "Это описано здесь:", documents=docs_found, trace=tr, hits=hits)
 
-    # 3. уточнять ли подразделение — по лучшему скору каждого документа
+    # 3. уточнять ли дирекцию — по лучшему скору документов каждой дирекции (стадию система выбирает сама)
+    dept_best = {}
+    for d, hs in per_doc.items():
+        if hs:
+            dep = by_id[d]["department"]
+            dept_best[dep] = max(dept_best.get(dep, 0), hs[0]["score"])
     if session.get("docs") or named:
-        docs = scope
-        tr.append("подразделение: " + ("выбрано в диалоге" if session.get("docs") else "названо в вопросе"))
+        depts = sorted({by_id[d]["department"] for d in scope}, key=lambda x: -dept_best.get(x, 0))
+        tr.append("дирекция: " + ("выбрана в диалоге" if session.get("docs") else "названа в вопросе"))
     else:
         floor = max(CLARIFY_FLOOR, CLARIFY_RATIO * best)
-        docs = [d for d, hs in sorted(per_doc.items(), key=lambda kv: -(kv[1][0]["score"] if kv[1] else 0))
-                if hs and hs[0]["score"] >= floor]
-        tr.append(f"подразделения с опорой: {len(docs)}")
-        if len(docs) >= 2 and session.get("clarifications", 0) < 2:
-            opts = [{"doc_id": i, "department": by_id[i]["department"], "stage": by_id[i]["stage"], "label": label(by_id[i], registry)} for i in docs]
-            return Turn("clarify", "Порядок зависит от подразделения. Какое вас интересует?",
-                        options=opts + [{"doc_id": "*", "label": "Несколько (комплексный проект)"}, {"doc_id": "?", "label": "Не знаю"}],
+        depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= floor]
+        tr.append(f"дирекций с опорой в регламентах: {len(depts)}")
+        if len(depts) >= 2 and session.get("clarifications", 0) < 2:
+            opts = [{"doc_id": dep, "department": dep, "label": DEPT_NAMES.get(dep, dep)} for dep in depts]
+            return Turn("clarify", "В дирекциях это устроено по-разному. О какой дирекции речь?",
+                        options=opts + [{"doc_id": "*", "label": "Проект нескольких дирекций"}, {"doc_id": "?", "label": "Не знаю"}],
                         trace=tr, hits=hits)
-        docs = docs[:1] or [hits[0]["doc_id"]]
+        depts = depts[:1] or [by_id[hits[0]["doc_id"]]["department"]]
 
-    # 4. ответ по каждому подразделению — параллельно
-    def one(doc_id):
-        doc = by_id[doc_id]
-        ws = [{**w, "department_name": label(doc, registry),
-               "doc_title": "Практика службы качества" if w.get("kind") == "practice" else doc["display_title"]}
-              for w in per_doc.get(doc_id) or doc_hits(doc_id)[1]]
-        res, meta = llm_answer(llm, question, ws, label(doc, registry))
-        return {"doc_id": doc_id, "label": label(doc, registry), "result": res, "meta": meta}
+    # 4. ответ по каждой дирекции — параллельно; окна из всех её документов (пресейл/проект — внутри)
+    def one(dep):
+        ws = []
+        for d in [x for x in scope if by_id[x]["department"] == dep] or [x["doc_id"] for x in registry if x["department"] == dep]:
+            doc = by_id[d]
+            for w in per_doc.get(d) or doc_hits(d)[1]:
+                ws.append({**w, "department_name": DEPT_NAMES.get(dep, dep),
+                           "doc_title": "Практика службы качества" if w.get("kind") == "practice" else doc["display_title"]})
+        ws = sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"])[:10]
+        res, meta = llm_answer(llm, question, ws, DEPT_NAMES.get(dep, dep))
+        return {"doc_id": dep, "label": DEPT_NAMES.get(dep, dep), "result": res, "meta": meta}
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        results = list(ex.map(one, docs))
+        results = list(ex.map(one, depts))
     for r in results:
         tr.append(f"ответ {r['label']}: {r['result']['verdict']}, шагов {len(r['result']['steps'])}, отклонено {len(r['result']['rejected'])}")
     verdicts = [r["result"]["verdict"] for r in results]

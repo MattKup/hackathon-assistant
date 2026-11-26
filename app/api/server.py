@@ -130,7 +130,7 @@ class App:
     def analytics(self):
         rows = []
         if self.log.exists():
-            rows = [json.loads(l) for l in self.log.read_text().splitlines() if l.strip()]
+            rows = [r for r in (json.loads(l) for l in self.log.read_text().splitlines() if l.strip()) if "outcome" in r]
         from collections import Counter
         out = Counter(r["outcome"] for r in rows)
         times = sorted(r.get("seconds", 0) for r in rows if r["outcome"] != "clarify")
@@ -159,13 +159,9 @@ class App:
         if choice is not None and s["pending"]:
             q = s["pending"]
             opts = s["pending_options"]
-            if choice == "?":
-                s["docs"] = [o["doc_id"] for o in opts if o["doc_id"] not in ("*", "?")]
-                s["compare"] = True
-            elif choice == "*":
-                s["docs"] = [o["doc_id"] for o in opts if o["doc_id"] not in ("*", "?")]
-            else:
-                s["docs"] = choice.split(",")
+            depts = [o["doc_id"] for o in opts if o["doc_id"] not in ("*", "?")]
+            chosen = depts if choice in ("?", "*") else [c for c in choice.split(",") if c]
+            s["docs"] = [d["doc_id"] for d in self.registry if d["department"] in chosen]
             s["clarifications"] += 1
         t0 = time.time()
         turn = run_turn(q, self.registry, self.search, self.llm, session={"docs": s["docs"], "clarifications": s["clarifications"]})
@@ -176,7 +172,7 @@ class App:
             r = a["result"]
             out["answers"].append({"label": a["label"], "verdict": r["verdict"], "summary": r["summary"], "caveat": r.get("caveat", ""),
                                    "missing": r.get("missing", ""), "steps": [
-                                       {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department")}
+                                       {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section")}
                                        | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]]})
         if turn.outcome == "clarify":
             s["pending"], s["pending_options"] = q, turn.options
@@ -296,6 +292,10 @@ def make_handler(app):
                     out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""))
                     out["session"] = sid
                     return self._json(200, out)
+                if self.path == "/api/feedback":
+                    with open(app.log, "a") as fh:
+                        fh.write(json.dumps({"t": time.time(), "sid": b.get("session"), "feedback": b.get("value")}) + "\n")
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/docs/remove":
                     app.remove_upload(b["doc_id"])
                     return self._json(200, {"ok": True})
