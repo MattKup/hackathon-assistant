@@ -116,7 +116,7 @@ class VerdictFlowTest(unittest.TestCase):
 
 class DialogTest(unittest.TestCase):
     """Режим диалога (кейс 2): уточнение условия; кейс 1: случай не оговорён → письмо автоматически."""
-    ASK = {"ДБРЦТ": {"ask": "Есть подписанное гарантийное письмо?", "ask_options": ["Есть", "Нет"]}}
+    ASK = {"ДБРЦТ": {"ask": "Предложение уже подано?", "ask_options": ["Предложение подано", "Предложения ещё нет", "Не определено, нужна экспертиза"]}}
 
     def test_condition_ask_then_answer(self):
         llm = FakeLLM({"ДБРЦТ": "answer"}, extra=self.ASK)
@@ -124,11 +124,11 @@ class DialogTest(unittest.TestCase):
         q = "ДБРЦТ: можно стартовать до договора?"
         t1 = run_turn(q, REG, search_for(WINS), llm, session=sess)
         self.assertEqual(t1.outcome, "ask")
-        self.assertEqual([o["label"] for o in t1.options], ["Есть", "Нет", "Не знаю"])
-        sess["ask_reply"] = "Есть"
+        self.assertEqual([o["label"] for o in t1.options], ["Предложение подано", "Предложения ещё нет", "Не знаю"])  # вариант не из пункта отсечён
+        sess["ask_reply"] = "Предложение подано"
         t2 = run_turn(q, REG, search_for(WINS), llm, session=sess)
         self.assertEqual(t2.outcome, "answer")
-        self.assertIn("Уточнение сотрудника: Есть подписанное гарантийное письмо? — Есть", llm.calls[-1][1])
+        self.assertIn("Уточнение сотрудника: Предложение уже подано? — Предложение подано", llm.calls[-1][1])
         self.assertNotIn("ask", sess)
 
     def test_condition_dont_know(self):
@@ -154,6 +154,12 @@ class DialogTest(unittest.TestCase):
         self.assertEqual(t.outcome, "answer_with_caveat")
         self.assertTrue(t.route and t.route.get("email"))
         self.assertTrue(t.answers)                                  # правило показываем
+
+    def test_complex_project_no_auto_letter(self):
+        nc = {"case_covered": False}
+        llm = FakeLLM({"Техническая дирекция": "answer_with_caveat", "ДБРЦТ": "answer"}, extra={"Техническая дирекция": nc})
+        t = run_turn("Общий конкурс ДБРЦТ и Техдирекции: за сколько запускать расчёт?", REG, search_for(WINS), llm, session={})
+        self.assertFalse(t.route and t.route.get("email"))
 
     def test_conflict_sends_letter(self):
         t = run_turn("ДБРЦТ: можно стартовать до договора?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "conflict"}), session={})

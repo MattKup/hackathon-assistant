@@ -101,9 +101,21 @@ def practice_covers(r):
     return any(w.get("kind") == "practice" and w.get("score", 0) >= PRACTICE_COVERS for w in r.get("windows") or [])
 
 
-def not_covered(results):
-    return any(r["result"]["verdict"] == "answer_with_caveat" and r["result"].get("case_covered") is False
-               and not practice_covers(r) for r in results)
+def not_covered(results, complex_=False):
+    """Автописьмо «случай не оговорён» — только по ответу одной дирекции и не в комплексном проекте
+    (v6: письмо уходило на каждую оговорку, в 10 из 15 комплексных проектов)."""
+    shown = [r for r in results if r["result"]["verdict"] != "no_answer"]
+    if complex_ or len(shown) != 1:
+        return False
+    r = shown[0]
+    return r["result"]["verdict"] == "answer_with_caveat" and r["result"].get("case_covered") is False and not practice_covers(r)
+
+
+def grounded_options(options, windows):
+    """Варианты уточнения — только словами пункта (проверка кодом, как цитаты; v6 q148: «Не определено, требуется экспертиза»)."""
+    from app.answer.core import stems
+    text = stems(" ".join(w.get("text", "") for w in windows))
+    return [o.strip() for o in options if o.strip() and stems(o) & text][:4]
 
 
 def in_scope_llm(llm, question):
@@ -170,13 +182,13 @@ def _ask_turn(session, kind, question, text, options, tr, hits, base=None, dep=N
     return Turn("ask", text, options=[{"doc_id": f"a{i}", "label": o} for i, o in enumerate(options)], trace=tr, hits=hits)
 
 
-def _final(results, note, tr, hits, session, question):
+def _final(results, note, tr, hits, session, question, complex_=False):
     """Ответ готов. Одна дирекция и ответ зависит от условия, не сказанного в вопросе, → уточняющий вопрос (кейс 2);
     правило есть, а случай не оговорён → ответ с оговоркой + автоматическое письмо в службу качества (кейс 1)."""
     shown = [r for r in results if r["result"]["verdict"] != "no_answer"]
     if len(shown) == 1 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
         r = shown[0]
-        opts = [o for o in r["result"].get("ask_options") or [] if o.strip()]
+        opts = grounded_options(r["result"].get("ask_options") or [], r.get("windows") or [])
         if r["result"].get("ask", "").strip() and len(opts) >= 2:
             session["clarifications"] = session.get("clarifications", 0) + 1
             tr.append(f"{r['label']}: ответ зависит от условия, которого нет в вопросе, — уточняю")
@@ -189,7 +201,7 @@ def _final(results, note, tr, hits, session, question):
         tr.append("Пункты регламента противоречат друг другу — отправляю вопрос в службу качества")
         t.text = CONFLICT + (" " + note if note else "")
         t.route = {"to": "служба качества", "email": True, "why": "противоречие между пунктами регламента"}
-    elif not_covered(results):
+    elif not_covered(results, complex_):
         tr.append("Правило есть, но случай сотрудника в нём не оговорён — отправляю вопрос в службу качества")
         t.text = (NOT_COVERED + (" " + note if note else ""))
         t.route = {"to": "служба качества", "email": True, "why": "случай не оговорён"}
@@ -242,7 +254,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
         if cached and chosen <= set(cache["answers"]):
             tr.append("Ответы по дирекциям уже готовы — показываю " + ("выбранную" if len(cached) == 1 else "выбранные"))
             hits = cache["hits"]
-            return _final(cached, "", tr, hits, session, question)
+            return _final(cached, "", tr, hits, session, question, bool(session.get("complex")) or len(cached) > 1)
 
     # 1. понять вопрос (агентный шаг)
     u, _ = understand(llm, question)
@@ -291,7 +303,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
     def _finish(results, note=""):
         if all(r["result"]["verdict"] == "no_answer" for r in results):
             return escalate_or_scope(results)
-        return _final(results, note, tr, hits, session, question)
+        return _final(results, note, tr, hits, session, question, complex_)
 
     if best < NO_SUPPORT:
         if not in_scope_llm(llm, question):
