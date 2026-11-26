@@ -188,7 +188,10 @@ def make_handler(app):
             return self._json(404, {"error": "not found"})
 
         def do_POST(self):
-            b = self._body()
+            try:
+                b = self._body()
+            except ValueError:
+                return self._json(400, {"error": "тело запроса — не JSON"})
             try:
                 if self.path == "/api/ask":
                     sid = b.get("session") or uuid.uuid4().hex
