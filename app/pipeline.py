@@ -29,6 +29,7 @@ OUT_OF_SCOPE = re.compile(r"\b(как\w*\s+марж\w*\s+постав|марж\w
                           r"конкурент\w*|зарплат\w*|отпуск\w*|больничн\w*|постав\w*\s+марж\w*\s+\d|марж\w*\s+\d+\s*%\s+или)", re.I)
 PER_DOC = 16      # фрагментов на документ после слияния запросов
 GLOBAL_K = 16     # общий поиск по всей базе: фрагментов на формулировку
+PER_DOC_GLOBAL = 4 # в общем поиске — не больше окон одного документа
 MAX_DEPTS = 3     # дирекций, по которым готовим ответ, — не больше (на большой базе)
 DOCS_PER_DEPT = 3 # документов дирекции для подробного поиска — не больше
 CTX_CHARS = 21000 # бюджет контекста на вызов в знаках (решение 24.11, ≈ 6,4 тыс. токенов)
@@ -36,6 +37,7 @@ MAX_CTX_TOKENS, MAX_OUT_TOKENS = 16384, 1500   # vLLM max-model-len и лими�
 PER_DEPT = 18     # фрагментов на дирекцию в контексте модели (документы маленькие, контекст позволяет)
 CLARIFY_FLOOR = 0.15      # документ считается «с опорой», если его лучший скор ≥ max(FLOOR, RATIO × лучший общий)
 CLARIFY_RATIO = 0.3
+DOC_RATIO = 0.5            # «где описано»: документ называем, если его пункт не слабее половины лучшего
 OOS_SUPPORT = 0.5          # «вне регламентов» по разбору вопроса — только если в регламентах нет сильной опоры
 NO_SUPPORT = 0.05          # ниже — опоры нет (v1: 0.30, v2: 0.12 — терялись верные ответы; дальше решает verdict модели)
 
@@ -66,6 +68,7 @@ class Turn:
     documents: list = field(default_factory=list)     # для «где регламент»: [{title, label, sections}]
     external_refs: list = field(default_factory=list)
     tokens: dict = field(default_factory=dict)        # для расчёта экономики: вызовы и токены модели за ход
+    question: str = ""                                # вопрос, по которому дан ход (после уточнения темы — уточнённый)
 
 
 COMPLEX_NOTE = ("\n\n(Это комплексный проект нескольких дирекций. Ответь для части работ, которую ведёт {dept}, по её регламенту. "
@@ -186,11 +189,24 @@ def not_covered(results, complex_=False):
     return r["result"]["verdict"] == "answer_with_caveat" and r["result"].get("case_covered") is False and not practice_covers(r)
 
 
-def grounded_options(options, windows):
-    """Варианты уточнения — только словами пункта (проверка кодом, как цитаты; v6 q148: «Не определено, требуется экспертиза»)."""
-    from app.answer.core import stems
-    text = stems(" ".join(w.get("text", "") for w in windows))
-    return [o.strip() for o in options if o.strip() and stems(o) & text][:4]
+def grounded_options(options, windows, steps=()):
+    """Варианты уточнения — словами процитированных пунктов (ревью Fable К7: по всем 18 окнам проходило что угодно,
+    а «Да/Нет» не проходили никогда). «Да»/«Нет»/«Есть» — допустимы; «не определено», «экспертиза» — нет."""
+    from app.answer.core import NUM, stems
+    cited = [st.get("source_text", "") for st in steps if st.get("source_text")] or [w.get("text", "") for w in windows]
+    text = " ".join(cited)
+    st_text, nums = stems(text), set(NUM.findall(text))
+    out = []
+    for o in options:
+        o = o.strip()
+        lo = o.lower()
+        if not o or re.search(r"не\s*определ|экспертиз|неизвест|затрудняюсь", lo):
+            continue
+        if set(NUM.findall(o)) - nums:
+            continue
+        if re.match(r"^(да|нет|есть|ещё нет|еще нет)\b", lo) or stems(o) & st_text:
+            out.append(o)
+    return out[:4]
 
 
 def in_scope_llm(llm, question):
@@ -301,6 +317,8 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer
     c = Counted(llm)
     session["_conflicts"] = conflicts
     t = _run_turn(question, registry, search_fn, c, session, workers, answer_cache)
+    t.question = t.question or session.get("_effective_q") or question
+    session.pop("_effective_q", None)
     session.pop("_conflicts", None)
     t.tokens = c.t
     return t
@@ -318,7 +336,7 @@ def _final(results, note, tr, hits, session, question, complex_=False):
     shown = [r for r in results if r["result"]["verdict"] != "no_answer"]
     if len(shown) == 1 and not session.get("no_clarify") and not any(r["result"]["verdict"] == "conflict" for r in shown) and session.get("clarifications", 0) < 2:
         r = shown[0]
-        opts = grounded_options(r["result"].get("ask_options") or [], r.get("windows") or [])
+        opts = grounded_options(r["result"].get("ask_options") or [], r.get("windows") or [], r["result"].get("steps") or [])
         if r["result"].get("ask", "").strip() and len(opts) >= 2:
             session["clarifications"] = session.get("clarifications", 0) + 1
             tr.append(f"{r['label']}: ответ зависит от условия, которого нет в вопросе, — уточняю")
@@ -331,6 +349,10 @@ def _final(results, note, tr, hits, session, question, complex_=False):
         # ответ опирается на пункт, который отсылает к документу вне базы, — ответ неполный: оговорка (v7 q154, q155)
         t.outcome = "answer_with_caveat"
         tr.append("Пункт ответа отсылает к документу, которого нет в базе, — ответ неполный")
+    if t.outcome == "conflict" and not any(r["result"].get("conflict_with") for r in results) and not any(
+            len({st.get("clause") for st in r["result"].get("steps", [])}) >= 2 for r in results if r["result"]["verdict"] == "conflict"):
+        t.outcome = "answer_with_caveat"            # «противоречие» со слов модели без двух проверенных пунктов — оговорка, не письмо
+        tr.append("Модель отметила противоречие, но не опёрла его на два пункта — показываю как ответ с оговоркой")
     if t.outcome == "conflict":
         tr.append("Пункты регламента противоречат друг другу — отправляю вопрос в службу качества")
         t.text = CONFLICT + (" " + note if note else "")
@@ -355,6 +377,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                 return Turn("escalate", "Я отправил вопрос в службу качества, вы в копии — ответ придёт на почту.",
                             route={"to": "служба качества", "email": True}, trace=tr)
             tr.append(f"Сотрудник уточнил тему: {reply}")
+            session["_effective_q"] = f"{question} ({reply})"      # дальше по диалогу — уточнённый вопрос (Fable К2)
             return _run_turn(f"{question} ({reply})", registry, search_fn, llm, session, workers, answer_cache)
         base = ask["base"]
         if reply == ASK_DONT_KNOW:
@@ -405,7 +428,12 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     named = mentioned(question, registry) or _docs_for(set(u.get("departments") or []), u.get("stage", ""), registry)
     if named:
         tr.append("Дирекция названа в вопросе")
-    scope = list(session.get("docs") or named or [d["doc_id"] for d in registry])
+    # названная в вопросе дирекция важнее выбранной ранее в диалоге (ревью Fable 26.11: «А в ДБРЦТ…» после выбора ТД
+    # получал ответ ТД); выбранная ранее — для продолжений без названия дирекции (SPEC п. 5)
+    if named and session.get("docs") and set(named) != set(session["docs"]):
+        session["docs"] = []
+        tr.append("В вопросе названа другая дирекция — отвечаю по ней")
+    scope = list(named or session.get("docs") or [d["doc_id"] for d in registry])
 
     # 2. поиск в два шага (универсальная версия): сначала по всей доступной базе — один раз на формулировку,
     #    затем вглубь — только в лучших документах лучших дирекций. Число поисков не растёт с размером базы:
@@ -420,7 +448,18 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                 rrf[wid] = rrf.get(wid, 0) + 1 / (10 + r)
                 if wid not in best or h["score"] > best[wid]["score"]:
                     best[wid] = h
-        order = sorted(best, key=lambda w: -rrf[w])[:k]
+        order = sorted(best, key=lambda w: -rrf[w])
+        if allowed is None:
+            # общий шаг: не больше PER_DOC_GLOBAL окон одного документа — иначе шаблонные регламенты (копии, редакции)
+            # забивают выдачу и другие дирекции не попадают в ответ (ревью Fable К10, scale-test)
+            per, kept = {}, []
+            for w in order:
+                d = best[w]["doc_id"]
+                if per.get(d, 0) < PER_DOC_GLOBAL:
+                    per[d] = per.get(d, 0) + 1
+                    kept.append(w)
+            order = kept
+        order = order[:k]
         return sorted((best[w] for w in order), key=lambda h: -h["score"])
 
     whole = not session.get("docs") and not named
@@ -500,7 +539,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: "
                         + "; ".join(ext), trace=tr, hits=hits, external_refs=ext)
         docs_found = []
-        for h in hits[:6]:
+        for h in [x for x in hits[:6] if x["score"] >= DOC_RATIO * best]:     # q208: не называть документ со слабым пунктом
             if h["doc_id"] not in [d["doc_id"] for d in docs_found] and h["doc_id"] in by_id:
                 docs_found.append({"doc_id": h["doc_id"], "title": by_id[h["doc_id"]]["display_title"],
                                    "label": label(by_id[h["doc_id"]], registry), "sections": []})
@@ -539,7 +578,12 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         ws = budget(sorted({w["window_id"]: w for w in ws}.values(), key=lambda w: -w["score"]))
         q = question + (COMPLEX_NOTE.format(dept=names.get(dep, dep)) if complex_ else "")
         ws = fit_tokens(llm, q, ws, names.get(dep, dep))
-        res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache)
+        try:
+            res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache)
+        except Exception as e:             # сбой по одной дирекции не роняет весь ход (ревью Fable К12)
+            res = {"verdict": "no_answer", "summary": "", "steps": [], "rejected": [], "caveat": "",
+                   "missing": "ответ не получен из-за сбоя модели", "error": str(e)[:120]}
+            meta = {"error": str(e)[:120]}
         meta["clauses_seen"] = [w["clause"] for w in ws]
         meta["context_chars"] = sum(len(w["text"]) for w in ws)
         return {"doc_id": dep, "label": names.get(dep, dep), "result": res, "meta": meta, "windows": ws}

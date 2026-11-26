@@ -4,11 +4,14 @@
 подтверждает или правит её — только после этого знание попадает в базу.
 """
 import json
+from app.config import dept_ids
+
+_DEPTS = dept_ids([]) or ["NONE"]        # подразделения — из config/documents.json (универсальная версия)
 
 SYSTEM = ("Ты обрабатываешь письмо эксперта службы качества — ответ на вопрос сотрудника по регламентам проектной "
           "деятельности. Определи по тексту письма: is_final — это итоговый ответ на вопрос (а не «уточняю у коллег», "
           "встречный вопрос, пересылка, благодарность); answer — итоговый ответ коротко, простыми словами, без "
-          "добавлений от себя; applies_to — к каким подразделениям применим ответ: список из TECH, IB, DBRCT или "
+          "добавлений от себя; applies_to — к каким подразделениям применим ответ: список кодов подразделений или "
           "['ALL'], если эксперт говорит, что для всех; question_general — вопрос в общем виде, без частностей "
           "сотрудника (как его зададут другие); variants — 2–4 других формулировки этого вопроса; outcome — practice (разъяснение практики) или "
           "regulation_change (эксперт говорит, что нужно изменить или дополнить регламент). Только из текста письма.")
@@ -17,7 +20,7 @@ SCHEMA = {"type": "object", "additionalProperties": False,
           "properties": {"is_final": {"type": "boolean"}, "answer": {"type": "string", "maxLength": 800},
                          "question_general": {"type": "string", "maxLength": 300},
                          "variants": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 200}},
-                         "applies_to": {"type": "array", "items": {"enum": ["TECH", "IB", "DBRCT", "ALL"]}, "maxItems": 3},
+                         "applies_to": {"type": "array", "items": {"enum": _DEPTS + ["ALL"]}, "maxItems": 5},
                          "outcome": {"enum": ["practice", "regulation_change"]}}}
 
 
@@ -36,7 +39,7 @@ def process_replies(store, mailbox, llm, link_fn=None, autopublish=False):
             store.set_status(case["case_id"], "in_work")
             events.append({"case_id": case["case_id"], "event": "interim"})
             continue
-        applies = ["TECH", "IB", "DBRCT"] if "ALL" in res["applies_to"] or not res["applies_to"] else res["applies_to"]
+        applies = list(_DEPTS) if "ALL" in res["applies_to"] or not res["applies_to"] else res["applies_to"]
         clauses = link_fn(case["question"], res["answer"], applies) if link_fn else []
         qtext = res.get("question_general") or case["question"]
         variants = [v for v in res.get("variants", []) if v.strip()]

@@ -51,13 +51,22 @@ class LLM:
                 "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}},
                 "chat_template_kwargs": {"enable_thinking": False}}
         t0 = time.time()
-        req = urllib.request.Request(self.url, data=json.dumps(body).encode(), method="POST",
-                                     headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                js = json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f"LLM {e.code}: {e.read()[:300]!r}") from e
+        for attempt in (1, 2):                 # один повтор при сетевом сбое, таймауте или 5xx (ревью Fable К12)
+            req = urllib.request.Request(self.url, data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    js = json.loads(r.read())
+                break
+            except urllib.error.HTTPError as e:
+                if e.code >= 500 and attempt == 1:
+                    time.sleep(1)
+                    continue
+                raise RuntimeError(f"LLM {e.code}: {e.read()[:300]!r}") from e
+            except (urllib.error.URLError, TimeoutError, OSError):
+                if attempt == 2:
+                    raise
+                time.sleep(1)
         ch = js["choices"][0]
         usage = js.get("usage", {})
         meta = {"seconds": round(time.time() - t0, 3), "finish": ch.get("finish_reason"),

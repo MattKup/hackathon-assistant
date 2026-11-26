@@ -163,10 +163,10 @@ class DialogTest(unittest.TestCase):
         t = run_turn("Общий конкурс ДБРЦТ и Техдирекции: за сколько запускать расчёт?", REG, search_for(WINS), llm, session={})
         self.assertFalse(t.route and t.route.get("email"))
 
-    def test_conflict_sends_letter(self):
+    def test_model_conflict_on_one_clause_is_caveat_not_letter(self):
         t = run_turn("ДБРЦТ: можно стартовать до договора?", REG, search_for(WINS), FakeLLM({"ДБРЦТ": "conflict"}), session={})
-        self.assertEqual(t.outcome, "conflict")
-        self.assertEqual(t.route["why"], "противоречие между пунктами регламента")
+        self.assertEqual(t.outcome, "answer_with_caveat")      # противоречие не опёрто на два пункта (ревью Fable)
+        self.assertFalse(t.route and t.route.get("email"))
 
     def test_practice_covers_case(self):
         prac = {**win("dbr", "P1", "Старт по гарантийному письму согласует директор дирекции.", 0.9), "kind": "practice"}

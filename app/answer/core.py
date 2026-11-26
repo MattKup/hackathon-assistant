@@ -123,10 +123,40 @@ def stems(text):
     return {w[:4] for w in re.findall(r"[а-яё]{5,}", norm(text)) if w not in STOP}
 
 
+def _colloquial_map():
+    """Разговорные/английские синонимы из словаря: основы слова вопроса → термин регламента («проджект менеджер» → РП)."""
+    out = []
+    try:
+        syn = json.loads((ROOT / "config" / "synonyms.json").read_text())
+        for k, v in (syn.get("colloquial") or {}).items():
+            term = v.get("term") if isinstance(v, dict) else v
+            out.append((stems(k), term or ""))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def _term_in(term, text):
+    abbr = re.findall(r"\b[A-ZА-ЯЁ]{2,}\b", term)
+    return bool(stems(term) & stems(text)) or any(_has_abbr(a, text) for a in abbr)
+
+
+_COLLOQ = None
+
+
 def added_from_question(step_text, window_text, question):
     """Слова вопроса, которые модель перенесла в шаг, хотя в пункте их нет (26.11: «проверьте наличие
     гарантийного письма (п. 8.3)» — в п. 8.3 о письме ни слова). ≥ 2 таких основ — шаг дополнен из вопроса."""
-    return sorted((stems(step_text) & stems(question)) - stems(window_text))
+    global _COLLOQ
+    if _COLLOQ is None:
+        _COLLOQ = _colloquial_map()
+    # синоним из вопроса не считается добавкой, только если его термин есть в пункте (ревью Fable: «проджект менеджер» при «РП»);
+    # «гарантийка» при пункте без гарантийного письма — по-прежнему добавка (кейс 1)
+    ok = set()
+    for st, term in _COLLOQ:
+        if _term_in(term, window_text):
+            ok |= st
+    return sorted((stems(step_text) & stems(question)) - stems(window_text) - ok)
 
 
 def check(raw, windows, question=""):
@@ -165,6 +195,15 @@ def check(raw, windows, question=""):
                                  "department": w["department"], "doc_title": w["doc_title"],
                                  "source_text": w["text"], "section": w.get("section_title", ""),
                                  "external_refs": w.get("external_refs", [])})
+    # числа в кратком ответе и оговорке — только из процитированных пунктов (ревью Fable: q054, q082, q115, q118)
+    cited = " ".join(st["source_text"] for st in out["steps"])
+    if out["steps"]:
+        src = set(NUM.findall(cited))
+        if set(NUM.findall(out.get("summary", ""))) - src or foreign_entities(out.get("summary", ""), cited, q):
+            out["summary_replaced"] = out.get("summary", "")
+            out["summary"] = " ".join(st["text"] for st in out["steps"][:2])
+        if out.get("caveat") and set(NUM.findall(out["caveat"])) - src:
+            out["caveat"] = " ".join(x for x in _sentences(out["caveat"]) if not (set(NUM.findall(x)) - src))
     if raw.get("verdict") in ("answer", "answer_with_caveat", "conflict") and raw.get("steps") and not out["steps"]:
         out["verdict"] = "no_answer"
         out["downgraded"] = "все шаги без проверенной опоры"

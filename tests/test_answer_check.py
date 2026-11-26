@@ -99,3 +99,19 @@ class EntityCheckTest(unittest.TestCase):
     def test_garbled_rejected(self):
         r = check(self.step("SS готовит КП и направляет его Заказчику.", deadline="не позднее手続きы"), self.w, "Когда?")
         self.assertEqual(r["rejected"][0]["reason"], "garbled")
+
+
+class SynonymTest(unittest.TestCase):
+    def test_colloquial_synonym_of_term_in_clause_kept(self):
+        w = [{**W[0], "clause": "13.1", "text": "13.1. РП заводит бюджет проекта в учетной системе в течение 2 рабочих дней."}]
+        raw = {"verdict": "answer", "summary": "", "caveat": "", "missing": "", "steps": [
+            {"text": "Проджект менеджер (РП) заводит бюджет проекта в течение 2 рабочих дней.", "who": "РП", "deadline": "",
+             "ref": "w1", "quote": "РП заводит бюджет проекта в учетной системе"}]}
+        self.assertEqual(check(raw, w, "В какой срок проджект менеджер заводит бюджет проекта?")["verdict"], "answer")
+
+    def test_summary_number_not_in_source_replaced(self):
+        raw = {"verdict": "answer", "summary": "Не менее чем за 5 рабочих дней.", "caveat": "", "missing": "", "steps": [
+            {"text": "Инициируйте заявку не менее чем за 3 рабочих дня", "who": "", "deadline": "", "ref": "w1",
+             "quote": "не менее чем за 3 рабочих дня до подачи предложения"}]}
+        out = check(raw, W, "За сколько подавать заявку?")
+        self.assertNotIn("5", out["summary"])

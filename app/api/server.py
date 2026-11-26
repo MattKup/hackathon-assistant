@@ -125,6 +125,9 @@ class App:
 
     # --- загрузка документов (служба качества) ---
     def upload(self, file_name, data, department, stage):
+        import re as _re
+        department = _re.sub(r"[^\w]", "", (department or "").upper())[:24] or "OTHER"   # новое подразделение — любым кодом
+        stage = stage if stage in ("presale", "project", "full_cycle") else "full_cycle"
         doc_id, new = self.uploads.accept(file_name, data, department, stage)
         if new:
             threading.Thread(target=self._process_upload, args=(doc_id,), daemon=True).start()
@@ -198,6 +201,7 @@ class App:
             s["complex"] = choice == "*" or "," in choice
         elif q:
             s["complex"] = False
+            s["clarifications"] = 0                  # бюджет уточнений — на вопрос, а не на весь чат (Fable К1)
             s.pop("cache", None)
             s.pop("ask", None)
         t0 = time.time()
@@ -215,7 +219,7 @@ class App:
                                        {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section")}
                                        | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]]})
         if turn.outcome in ("clarify", "ask"):
-            s["pending"], s["pending_options"], s["pending_kind"] = q, turn.options, turn.outcome
+            s["pending"], s["pending_options"], s["pending_kind"] = turn.question or q, turn.options, turn.outcome
         else:
             s["pending"] = None
         s["last"] = {"q": q, "hits": turn.hits[:5], "employee": employee,
@@ -236,6 +240,10 @@ class App:
         last = s.get("last") or {}
         frags = [{"doc": h.get("path", "").split(" › ")[0], "clause": h["clause"], "text": h["text"]} for h in last.get("hits", [])]
         deps = last.get("depts") or sorted({label(d, self.registry) for d in self.registry if d["doc_id"] in (s.get("docs") or [])})
+        dup = next((c for c in self.store.cases() if c["question"] == last.get("q", "") and c["employee"] == last.get("employee", "")
+                    and time.time() - c["created"] < 2 * 3600 and c["status"] in ("sent", "interim")), None)
+        if dup:                                   # тот же вопрос того же сотрудника — новое письмо не шлём (ревью Fable К14)
+            return {"id": dup["case_id"], "to": self.qa_address, "cc": last.get("employee", ""), "sent": "already"}
         case = self.store.new_case(last.get("employee", ""), last.get("q", ""), deps, s.get("history", [])[-6:], frags, reason)
 
         def work():
