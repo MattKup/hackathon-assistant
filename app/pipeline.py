@@ -126,6 +126,13 @@ def in_scope_llm(llm, question):
         return True
 
 
+REF_TOP, REF_MIN = 3, 0.5   # отсылка к внешнему документу при «нет ответа» — из 3 лучших пунктов со скором ≥ 0,5
+
+
+def top_refs(hits):
+    return sorted({ref for h in hits[:REF_TOP] if h.get("score", 0) >= REF_MIN for ref in h.get("external_refs", [])})
+
+
 def cited_refs(results):
     """(6) Внешние документы — только из пунктов, на которые опирается ответ."""
     return sorted({ref for r in results for st in r["result"].get("steps", []) for ref in st.get("external_refs", [])})
@@ -197,6 +204,10 @@ def _final(results, note, tr, hits, session, question, complex_=False):
             session["ask"]["hits"] = hits[:5]
             return t
     t = Turn(outcome_of(results), note, answers=results, trace=tr, hits=hits, external_refs=cited_refs(results))
+    if t.outcome == "answer" and t.external_refs:
+        # ответ опирается на пункт, который отсылает к документу вне базы, — ответ неполный: оговорка (v7 q154, q155)
+        t.outcome = "answer_with_caveat"
+        tr.append("Пункт ответа отсылает к документу, которого нет в базе, — ответ неполный")
     if t.outcome == "conflict":
         tr.append("Пункты регламента противоречат друг другу — отправляю вопрос в службу качества")
         t.text = CONFLICT + (" " + note if note else "")
@@ -287,7 +298,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
 
     def escalate_or_scope(results):
         """(4) Перед письмом — проверка «вопрос вообще про процессы компании?»."""
-        ext = sorted(set(hits[0].get("external_refs", []))) if hits else []   # (6) только лучший пункт, не вся выдача
+        ext = top_refs(hits)
         if ext:
             tr.append("Пункт отсылает к документу, которого нет в базе, — называю его")
             return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: " + "; ".join(ext),
@@ -322,10 +333,10 @@ def _run_turn(question, registry, search_fn, llm, session, workers):
         return _ask_turn(session, "topic", question, "Уточните, о чём вопрос:", topics + [ASK_SEND], tr, hits)
 
     if FIND_DOC.search(question):
-        if hits[0].get("external_refs"):
-            ext = sorted(set(hits[0]["external_refs"]))
-            tr.append(f"Вопрос о том, где описано; лучший пункт ({hits[0]['clause']}) отсылает к документу, которого нет в базе")
-            return Turn("external_ref", f"Пункт {hits[0]['clause']} отсылает к отдельному документу, которого нет в базе ассистента: "
+        if top_refs(hits):
+            ext = top_refs(hits)
+            tr.append("Вопрос о том, где описано; найденный пункт отсылает к документу, которого нет в базе")
+            return Turn("external_ref", "Порядок описан в отдельном документе, которого нет в базе ассистента: "
                         + "; ".join(ext), trace=tr, hits=hits, external_refs=ext)
         docs_found = []
         for h in hits[:6]:

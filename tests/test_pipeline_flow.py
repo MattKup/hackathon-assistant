@@ -49,8 +49,10 @@ def search_for(windows):
 
 
 WINS = [win("tech", "1.5", "Расчёт инициируют за две недели до подачи конкурса.", 0.9),
-        win("dbr", "1.5", "Заявку подают не менее чем за три рабочих дня до предложения.", 0.8, ["Регламент подбора субподрядчика"]),
+        win("dbr", "1.5", "Заявку подают не менее чем за три рабочих дня до предложения.", 0.8),
         win("ib_pre", "2.1", "Заявку на расчёт создаёт SS в CRM.", 0.5)]
+WINS_EXT = [WINS[0], win("dbr", "1.5", "Заявку подают не менее чем за три рабочих дня до предложения.", 0.8,
+                         ["Регламент подбора субподрядчика"]), WINS[2]]
 
 
 class VerdictFlowTest(unittest.TestCase):
@@ -76,8 +78,8 @@ class VerdictFlowTest(unittest.TestCase):
 
     def test_one_answered_no_clarify_note_others(self):
         llm = FakeLLM({"ДБРЦТ": "answer"})
-        t = run_turn("За сколько запускать заявку на расчёт?", REG, search_for(WINS), llm, session={})
-        self.assertEqual(t.outcome, "answer")
+        t = run_turn("За сколько запускать заявку на расчёт?", REG, search_for(WINS_EXT), llm, session={})
+        self.assertEqual(t.outcome, "answer_with_caveat")          # пункт отсылает к документу вне базы
         self.assertEqual([a["label"] for a in t.answers], ["ДБРЦТ"])
         self.assertIn("не сказано", t.text)
         self.assertEqual(t.external_refs, ["Регламент подбора субподрядчика"])   # процитирован п. ДБРЦТ 1.5
@@ -106,7 +108,7 @@ class VerdictFlowTest(unittest.TestCase):
         for q in ["Какой документ описывает назначение TPS?", "В каком документе есть исключение RFI?",
                   "Какие два документа отдельно описывают подготовку расчёта?", "Где найти правила риск-фонда?"]:
             self.assertTrue(FIND_DOC.search(q), q)
-        t = run_turn("ДБРЦТ: где расписана работа с подрядчиком?", REG, search_for(WINS), FakeLLM({}), session={})
+        t = run_turn("ДБРЦТ: где расписана работа с подрядчиком?", REG, search_for(WINS_EXT), FakeLLM({}), session={})
         self.assertEqual(t.outcome, "external_ref")
 
     def test_out_of_scope_margin_choice(self):
