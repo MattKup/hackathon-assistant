@@ -401,12 +401,13 @@ def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index,
     return {"res": res2, "meta": meta2, "ws": ws2, "better": better, "added": len(extra), "why": why}
 
 
-CROSS_SUPPORT = 0.15       # Г17: ниже — в «молчащей» дирекции по теме ничего нет, второй раз не спрашиваем (= CLARIFY_FLOOR)
+CROSS_SUPPORT = 0.35       # Г17: полоса чуть ниже DEEP_SUPPORT. Замер 154638Z (порог 0,15, v4, 1 поток): 27 проходов, польза одна —
+                           # v4_091 при опоре 0,39; 14 проходов при опоре < 0,35 — все впустую (≈ +2 с на вопрос)
 
 
 def cross_targets(results, support=None):
     """Г17, отбор (Fable 27.11, замер 8c9d463 на v4): перекрёстный проход — только там, где второго взгляда ещё не было.
-    Дирекция, в которой агент уже копнул глубже и модель дважды сказала «нет ответа», третий раз не спрашивается: из 36 таких
+    Дирекция, в которой агент уже копнул глубже и модель дважды сказала «нет ответа», третий раз не спрашивается: из 39 таких
     проходов верный ответ дал 1 (и тот — отказ проверки цитат), а 2 вытянули похожее правило там, где своего нет
     (v4_046 ИБ, v4_082 ДБРЦТ). Проходим, если: (а) модель ответила, но все шаги сняты проверкой цитат (downgraded), или
     (б) глубокого прохода не было, а опора по теме есть (≥ CROSS_SUPPORT)."""
@@ -661,6 +662,14 @@ def keep_doc_abbr(question, u, abbr, tr):
     return {**u, "queries": keep or [q_up]}
 
 
+def live(session, text):
+    """Ход работы для веба (быстрый ответ, 27.11): что помощник делает прямо сейчас. Только показ ожидания — в ответ,
+    трассу и решения не попадает; список читает сервер (/api/progress), пока идёт ход."""
+    steps = session.get("_live") if session else None
+    if steps is not None:
+        steps.append(text)
+
+
 def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None, conflicts=None, index=None, abbr=None):
     """search_fn(query, allowed) -> hits (score реранкера).
     session (мутируется): docs, clarifications, no_clarify, complex; cache — ответы по дирекциям до выбора;
@@ -681,6 +690,7 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer
     session.pop("_conflicts", None)
     session.pop("_index", None)
     session.pop("_abbr", None)
+    session.pop("_live", None)
     t.tokens = c.t
     return t
 
@@ -807,6 +817,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     # исходная формулировка всегда в поиске: переписывание может увести в сторону (26.11: «заявка» → «РТЗ»)
     queries = list(dict.fromkeys([strip_departments(question, registry)] + [strip_departments(x, registry) for x in u["queries"]]))[:4]
     tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
+    live(session, "Понял вопрос — ищу пункты в регламентах")
     terms = "" if "G3" in OFF else "; ".join(queries[1:])
     if "G13" in ON:                                  # Г13: сработавшие пары словаря «слово → термин регламента»
         from app.answer.core import fired_pairs
@@ -891,6 +902,9 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                f"Искал в документах дирекции ({len(scope)})") + ", затем подробно — "
               f"в {len(deep)} {plural(len(deep), 'документе', 'документах', 'документах')}; {len(queries)} "
               f"{plural(len(queries), 'формулировка', 'формулировки', 'формулировок')}")
+    if hits:
+        live(session, f"Ближе всего — {ref_label(hits[0])} ({dept_titles(registry).get(by_id[hits[0]['doc_id']]['department'], '')}); читаю найденные пункты"
+             if hits[0].get("doc_id") in by_id else "Нашёл пункты по теме; читаю их")
 
     def escalate_or_scope(results):
         """(4) Перед письмом — проверка «вопрос вообще про процессы компании?»."""
@@ -967,6 +981,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     else:
         depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= NO_SUPPORT][:MAX_DEPTS]
         tr.append(f"Готовлю ответ по каждой дирекции, где нашлись пункты: {len(depts)}")
+    live(session, "Готовлю ответ и сверяю цитаты с текстом пунктов" + (f" — по {len(depts)} дирекциям" if len(depts) > 1 else ""))
     # (2) комплексный проект: каждая дирекция отвечает за свою часть
     complex_ = len(depts) >= 2 and (session.get("complex") or len({by_id[d]["department"] for d in named}) >= 2)
 
@@ -993,6 +1008,8 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                    "missing": "ответ не получен из-за сбоя модели", "error": str(e)[:120]}
             meta = {"error": str(e)[:120]}
         why = needs_deep(res, dept_best.get(dep, 0)) if not session.get("no_deep") else ""
+        live(session, f"{names.get(dep, dep)}: " + ("добираю соседние пункты и пункты по ссылкам — проверяю ещё раз" if why else
+                                                      "прямого ответа нет" if res["verdict"] == "no_answer" else "ответ готов, цитаты сверены"))
         if why:
             try:
                 d = deep_pass(llm, q, dep, names.get(dep, dep), ws, res, meta, search_fn,
@@ -1015,6 +1032,8 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
     if not fixed and "G17" not in OFF and not session.get("no_deep"):
+        if any(r["result"]["verdict"] != "no_answer" for r in results) and cross_targets(results, dept_best):
+            live(session, "Проверяю, нет ли того же правила в регламенте другой дирекции")
         results = cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers, dept_best)
     for r in results:
         res = r["result"]
@@ -1051,6 +1070,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             complex_ = True
             return _finish(answered, note)
     if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
+        live(session, "Ответ есть в нескольких дирекциях — сравниваю, одинаков ли он")
         same, diff = (False, "") if "G9" in ON else answers_same(llm, question, answered)
         if same:
             tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и по сути одинаков — уточнять не нужно")
