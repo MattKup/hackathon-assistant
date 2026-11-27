@@ -6,6 +6,7 @@
 """
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -47,10 +48,39 @@ def run(corpus, out):
             doc["status_reason"] = "0 окон"
         docs.append(doc)
         windows += ws
+    if os.environ.get("DOC_INTEL_URL") and os.environ.get("DOC_INTEL_API_TOKEN"):
+        docs_pdf, wins_pdf = _pdfs(Path(corpus), out)
+        docs += docs_pdf
+        windows += wins_pdf
     (out / "registry.json").write_text(json.dumps(docs, ensure_ascii=False, indent=2))
     with open(out / "windows.jsonl", "w") as fh:
         for w in windows:
             fh.write(json.dumps(w.to_dict(), ensure_ascii=False) + "\n")
+    return docs, windows
+
+
+def _pdfs(corpus, out):
+    """PDF корпуса — тем же путём, что загрузка службой качества (doc-intel → абзацы → наша нарезка); для теста с помехами.
+    Описание документа — из `<файл>.meta.json`. Сбойный документ пропускаем с записью в журнал (помеха, не эталон)."""
+    import tempfile
+    from types import SimpleNamespace
+    from app.ingest.upload import Uploads
+    up = Uploads(":memory:", tempfile.mkdtemp(), os.environ["DOC_INTEL_URL"])
+    up._token = lambda: os.environ["DOC_INTEL_API_TOKEN"]
+    docs, windows = [], []
+    for f in sorted(corpus.glob("*.pdf")):
+        side = f.with_name(f.name + ".meta.json")
+        meta = json.loads(side.read_text()) if side.exists() else {}
+        try:
+            sha, _ = up.accept(f.name, f.read_bytes(), meta.get("department", "UNKNOWN"), meta.get("stage", "full_cycle"))
+            doc, ws = up.process(sha)
+        except Exception as e:                                   # noqa: BLE001
+            print(f"PDF пропущен {f.name}: {str(e)[:150]}", file=sys.stderr)
+            continue
+        doc.update({"department_name": meta.get("department_name", doc["department_name"]),
+                    "display_title": meta.get("title", doc["display_title"])})
+        docs.append(doc)
+        windows += [SimpleNamespace(**w, to_dict=(lambda w=w: w)) for w in ws]
     return docs, windows
 
 
