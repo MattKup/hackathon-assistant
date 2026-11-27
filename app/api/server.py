@@ -135,6 +135,7 @@ class App:
         with self.lock:
             self._rebuild_mock() if self.mock else self._rebuild_real()
             self.answer_cache.invalidate()        # индекс изменился — сохранённые ответы могут устареть
+            self.conflicts = None                 # индекс пунктов, расшифровки и сокращения документов пересоберутся при следующем вопросе
             self.conflicts = None                 # перечитать реестр противоречий с новым текстом пунктов
 
     # --- загрузка документов (служба качества) ---
