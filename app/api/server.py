@@ -377,6 +377,8 @@ class App:
                                        {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section", "label")}
                                        | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]],
                                    "related": r.get("related", []),
+                                   "rejected": [{"reason": x.get("reason", ""), "text": (x.get("text") or "")[:300], "quote": (x.get("quote") or "")[:300],
+                                                 "replaced": bool(x.get("replaced_by_quote"))} for x in r.get("rejected", [])],
                                    "conflict_with": [{"clause": c["clause"], "why": c.get("why", ""), "text": c.get("text", "")[:600]}
                                                      for c in r.get("conflict_with", [])],
                                    "deep": bool((a.get("meta") or {}).get("deep", {}).get("better")),
