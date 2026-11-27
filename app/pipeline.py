@@ -565,13 +565,50 @@ def _docs_for(depts, stage, registry):
     return out
 
 
-def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None, conflicts=None, index=None):
+def doc_abbr(windows, registry=()):
+    """Сокращения документов, которых нет в словаре: слова 2–6 букв, в текстах только прописными (ТЗТ).
+    Словарные (РП, ТКП) модель раскрывает сама; названия подразделений разбираются отдельно."""
+    caps, low = set(), set()
+    for w in windows:
+        for t in re.findall(r"[A-Za-zА-Яа-яЁё]{2,6}", w.get("text", "")):
+            if t.isupper():
+                caps.add(t)
+            elif t.islower():
+                low.add(t)
+    try:
+        from app.answer.understand import SYN
+        import json as _json
+        gl = {x.strip().upper() for k in (_json.loads(SYN.read_text()).get("abbreviations") or {}) for x in k.split(",")}
+    except Exception:
+        gl = set()
+    deps = [p for pats in dept_aliases(list(registry)).values() for p in pats]
+    return {t for t in caps if t.lower() not in low and t not in gl and not any(re.search(p, t.lower()) for p in deps)}
+
+
+def keep_doc_abbr(question, u, abbr, tr):
+    """Сокращение из вопроса, которое дословно есть в документах, не подменяется другим (владелец 27.11: «тзт» → ФТТ,
+    хотя «расчёт ТЗТ» есть в регламенте ТД). Оставляем запросы модели с этим сокращением, иначе — сам вопрос."""
+    found = list(dict.fromkeys(t.upper() for t in re.findall(r"[A-Za-zА-Яа-яЁё]{2,6}", question) if t.upper() in abbr))
+    if not found:
+        return u
+    keep = [q for q in u.get("queries") or [] if any(re.search(rf"(?<!\w){a}(?!\w)", q, re.I) for a in found)]
+    if len(keep) == len(u.get("queries") or []):
+        return u
+    q_up = question
+    for a in found:
+        q_up = re.sub(rf"(?<!\w){a}(?!\w)", a, q_up, flags=re.I)
+    tr.append("Сокращение из вопроса есть в документах — ищу его как есть: " + ", ".join(found))
+    return {**u, "queries": keep or [q_up]}
+
+
+def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None, conflicts=None, index=None, abbr=None):
     """search_fn(query, allowed) -> hits (score реранкера).
     session (мутируется): docs, clarifications, no_clarify, complex; cache — ответы по дирекциям до выбора;
     ask — открытый уточняющий вопрос (условие или тема); ask_reply — ответ сотрудника на него."""
     session = {} if session is None else session
     c = Counted(llm)
     session["_conflicts"], session["_index"] = conflicts, index
+    session["_abbr"] = abbr or set()
     _BASE_TITLES.titles = [d.get("display_title") or d.get("title") or "" for d in registry] + \
                           [d.get("title") or "" for d in registry]
     try:
@@ -583,6 +620,7 @@ def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer
     session.pop("_effective_q", None)
     session.pop("_conflicts", None)
     session.pop("_index", None)
+    session.pop("_abbr", None)
     t.tokens = c.t
     return t
 
@@ -695,6 +733,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         u, _ = understand(llm, question, registry)
         if uk and "error" not in u:
             answer_cache.put(uk, u)
+    u = keep_doc_abbr(question, u, session.get("_abbr") or set(), tr)
     # тип вопроса определяет модель (универсально); регулярные выражения — запасной путь, если разбор не удался
     intent = u.get("intent") or ""
     if intent == "task" or (not intent and TASK_VERBS.search(question)):

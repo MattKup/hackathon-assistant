@@ -29,7 +29,7 @@ for _a in sys.argv:
         os.environ["HK_ON"] = _a[5:]
 
 from app.answer.llm import LLM  # noqa: E402
-from app.pipeline import build_index, load_conflicts, run_turn  # noqa: E402
+from app.pipeline import build_index, doc_abbr, load_conflicts, run_turn  # noqa: E402
 from app.registry.build import run as build_registry  # noqa: E402
 from app.search.hybrid import Hybrid  # noqa: E402
 from app.search.tei import TEI  # noqa: E402
@@ -122,6 +122,7 @@ def main(corpus_rel, eval_rel, *rest):
         from app.analysis.registry import ConflictRegistry
         confirmed = ConflictRegistry(os.environ["CONFLICTS_DB"]).confirmed()
     conflicts, index = load_conflicts(windows, confirmed), build_index(windows)
+    abbr = doc_abbr(windows, docs)
     print(f"подтверждённых противоречий: {len(confirmed)}", flush=True)
     items = [json.loads(l) for l in open(inbox / eval_rel) if l.strip()]
     if limit:
@@ -137,7 +138,7 @@ def main(corpus_rel, eval_rel, *rest):
         t0 = time.time()
         try:
             sess = {"no_clarify": no_clarify}
-            t1 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+            t1 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index, abbr=abbr)
             row = {"id": e["id"], "class": e["class"], "question": q, "turn1": turn_dict(t1)}
             exp = e["expected"]["outcome"]
             ok = t1.outcome in EXPECT.get(exp, {exp})
@@ -157,7 +158,7 @@ def main(corpus_rel, eval_rel, *rest):
                 # для остальных — второй ход с первым вариантом, засчитывается по его исходу (отдельно считаем asked)
                 row["asked"] = [o["label"] for o in t1.options]
                 sess["ask_reply"] = t1.options[0]["label"]
-                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index, abbr=abbr)
                 row["turn2_choice"], row["turn2"] = t1.options[0]["label"], turn_dict(t2)
                 ok = exp in ("clarify", "compare_all", "ask_topic") or t2.outcome in EXPECT.get(exp, {exp})
                 tok2 = t2.tokens
@@ -166,7 +167,7 @@ def main(corpus_rel, eval_rel, *rest):
             if t1.outcome == "clarify" and e["class"] == "dont_know_dept":
                 alld = [d for o in t1.options if o["doc_id"] not in ("*", "?") for d in dept_doc.get(o["doc_id"], [])]
                 sess.update(docs=alld, clarifications=1)
-                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index, abbr=abbr)
                 t1.tokens = add_tokens(t1.tokens, t2.tokens)
                 row["turn2_choice"] = "не знаю → все варианты"
                 row["turn2"] = turn_dict(t2)
@@ -174,7 +175,7 @@ def main(corpus_rel, eval_rel, *rest):
             elif t1.outcome == "clarify" and e["expected"].get("clarify_options"):
                 dep = e["expected"]["clarify_options"][0]
                 sess.update(docs=dept_doc.get(dep, []), clarifications=1)
-                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index)
+                t2 = run_turn(q, docs, search, llm, session=sess, conflicts=conflicts, index=index, abbr=abbr)
                 t1.tokens = add_tokens(t1.tokens, t2.tokens)
                 row["turn2_choice"] = dep
                 row["turn2"] = turn_dict(t2)

@@ -24,7 +24,7 @@ from app.escalation.repeats import Repeats
 from app.escalation.process import practice_windows, process_replies
 from app.escalation.store import Store
 from app.ingest.upload import Uploads, parse_multipart
-from app.pipeline import build_index, load_conflicts, run_turn
+from app.pipeline import build_index, doc_abbr, load_conflicts, run_turn
 from app.registry.build import run as build_registry
 from app.search.bm25 import BM25
 from app.search.vectors import VectorStore
@@ -253,8 +253,10 @@ class App:
         if getattr(self, "conflicts", None) is None:
             self.conflicts = load_conflicts(self.windows, self.conflict_reg.confirmed())   # только подтверждённые СК
             self.index = build_index(self.windows)                  # пункты по номеру — для агентного прохода
+        if getattr(self, "_abbr_n", None) != len(self.windows):   # сокращения документов — пересчёт при изменении базы
+            self.abbr, self._abbr_n = doc_abbr(self.windows, self.registry), len(self.windows)
         turn = run_turn(q, self.registry, self.search, self.llm, session=s, answer_cache=self.answer_cache,
-                        conflicts=self.conflicts, index=self.index)   # s хранит кэш ответов по дирекциям для второго хода
+                        conflicts=self.conflicts, index=self.index, abbr=self.abbr)   # s хранит кэш ответов по дирекциям для второго хода
         s["last_q"] = turn.question or q             # для продолжений «а по <дирекция>?»
         out = {"outcome": turn.outcome, "text": turn.text, "tokens": turn.tokens, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
