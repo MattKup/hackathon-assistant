@@ -332,7 +332,7 @@ class SameAcrossTest(unittest.TestCase):
         t = run_turn("Кто подаёт заявку на расчёт?", REG, search_for(WINS), llm, session={})
         self.assertNotEqual(t.outcome, "clarify")
         self.assertEqual(len(t.answers), 2)
-        self.assertIn("одинаков", t.text)
+        self.assertIn("ниже по каждой", t.text)
 
     def test_different_answers_clarify(self):
         llm = self.SameLLM(False, {"Техническая дирекция": "answer", "ДБРЦТ": "answer"})
@@ -491,4 +491,4 @@ class DispatcherTest(unittest.TestCase):
 
     def test_same(self):
         t = self.run_on("same")
-        self.assertIn("одинаков", t.text)
+        self.assertIn("ниже по каждой", t.text)

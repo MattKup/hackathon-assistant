@@ -193,6 +193,14 @@ DISPATCH_SYSTEM = (
 DISPATCH_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["decision", "reason"],
                    "properties": {"decision": {"enum": ["same", "per_department", "clarify_department"]},
                                   "reason": {"type": "string", "maxLength": 200}}}
+def _same_header(answered, note):
+    """Шапка ответа без уточнения дирекции. Совпадение ответов — вывод модели, кодом не проверено, поэтому не утверждаем
+    «порядок одинаков» (судья 27.11: v3_062/v2_072 — шапка «одинаков» при разных правилах = искажение); карточки — по каждой дирекции."""
+    labels = [r["label"] for r in answered]
+    head = "Ответ по дирекциям, где это описано: " + ", ".join(labels) + " — ниже по каждой."
+    return (head + " " + note).strip()
+
+
 DISPATCH_RU = {"same": "ответ одинаков во всех дирекциях", "per_department": "ответы по дирекциям раздельно",
                "clarify_department": "уточнить дирекцию"}
 
@@ -842,7 +850,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         d, why = dispatch(llm, question, answered, u)
         tr.append(f"Диспетчер решения: {DISPATCH_RU.get(d, d)} — {why}")
         if d == "same":
-            return _finish(answered, ("Порядок одинаков во всех дирекциях, где он описан. " + note).strip())
+            return _finish(answered, _same_header(answered, note))
         if d == "per_department":
             complex_ = True
             return _finish(answered, note)
@@ -850,7 +858,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         same, diff = (False, "") if "G9" in ON else answers_same(llm, question, answered)
         if same:
             tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и по сути одинаков — уточнять не нужно")
-            return _finish(answered, ("Порядок одинаков во всех дирекциях, где он описан. " + note).strip())
+            return _finish(answered, _same_header(answered, note))
         if diff:
             tr.append(f"Ответы дирекций различаются: {diff}")
         session["cache"] = {"q": question, "answers": {r["doc_id"]: r for r in answered}, "order": [r["doc_id"] for r in answered],
