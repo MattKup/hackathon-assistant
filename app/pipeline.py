@@ -401,12 +401,35 @@ def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index,
     return {"res": res2, "meta": meta2, "ws": ws2, "better": better, "added": len(extra), "why": why}
 
 
-def cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers=4):
+CROSS_SUPPORT = 0.15       # Г17: ниже — в «молчащей» дирекции по теме ничего нет, второй раз не спрашиваем (= CLARIFY_FLOOR)
+
+
+def cross_targets(results, support=None):
+    """Г17, отбор (Fable 27.11, замер 8c9d463 на v4): перекрёстный проход — только там, где второго взгляда ещё не было.
+    Дирекция, в которой агент уже копнул глубже и модель дважды сказала «нет ответа», третий раз не спрашивается: из 36 таких
+    проходов верный ответ дал 1 (и тот — отказ проверки цитат), а 2 вытянули похожее правило там, где своего нет
+    (v4_046 ИБ, v4_082 ДБРЦТ). Проходим, если: (а) модель ответила, но все шаги сняты проверкой цитат (downgraded), или
+    (б) глубокого прохода не было, а опора по теме есть (≥ CROSS_SUPPORT)."""
+    support = support or {}
+    out = []
+    for r in results:
+        res = r["result"]
+        if res["verdict"] != "no_answer" or not r.get("windows") or res.get("error"):
+            continue
+        if res.get("downgraded") or (not r["meta"].get("deep") and support.get(r["doc_id"], 0) >= CROSS_SUPPORT):
+            out.append(r)
+    return out
+
+
+def cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers=4, support=None):
     """Г17 (v4 27.11: «в дирекции X не нашёл», хотя ответ там есть — 7 из 100): если в одной дирекции ответ нашёлся,
     а в другой «нет ответа», агент ищет в ней то же правило формулировкой найденного ответа и отвечает ещё раз.
     Модель по-прежнему отвечает только по пунктам своей дирекции; проверки кодом те же."""
     found = [r for r in results if r["result"]["verdict"] in ("answer", "answer_with_caveat", "conflict")]
-    silent = [r for r in results if r["result"]["verdict"] == "no_answer" and r.get("windows")]
+    if "G17W" in ON:           # прежний широкий отбор — для сравнения: все «молчащие» дирекции
+        silent = [r for r in results if r["result"]["verdict"] == "no_answer" and r.get("windows")]
+    else:
+        silent = cross_targets(results, support) if found else []
     if not found or not silent:
         return results
     best = max(found, key=lambda r: (VERDICT_RANK.get(r["result"]["verdict"], 0), len(r["result"].get("steps", []))))
@@ -423,7 +446,7 @@ def cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cac
             return r
         if not d:
             return r
-        r["meta"]["deep"] = {"why": why, "added": d["added"], "better": d["better"], "verdict2": d["res"]["verdict"]}
+        r["meta"]["deep"] = {"why": why, "added": d["added"], "better": d["better"], "verdict2": d["res"]["verdict"], "cross": True}
         if d["better"]:
             r = {**r, "result": split_discrepancy(d["res"]), "windows": d["ws"]}
             r["meta"]["clauses_seen"] = [w["clause"] for w in d["ws"]]
@@ -992,7 +1015,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
     if not fixed and "G17" not in OFF and not session.get("no_deep"):
-        results = cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers)
+        results = cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers, dept_best)
     for r in results:
         res = r["result"]
         verdict = {"answer": "ответ", "answer_with_caveat": "ответ с оговоркой", "conflict": "противоречие",
@@ -1005,6 +1028,8 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         tr.append(f"{r['label']}: {verdict}" + (f", {n} {plural(n, 'шаг', 'шага', 'шагов')} со ссылками на пункты" if n else "")
                   + (f"; {rej} {plural(rej, 'утверждение отброшено', 'утверждения отброшены', 'утверждений отброшено')} проверкой цитат" if rej else "; все цитаты сверены с текстом"))
         r["meta"]["trace_debug"] = f"пункты в контексте: {', '.join(r['meta'].get('clauses_seen', []))}"
+        if "SUP" in ON:            # замер: опора дирекции в трассе (для подбора порогов Г17)
+            tr.append(f"{r['label']}: опора {dept_best.get(r['doc_id'], 0):.2f}")
         if res.get("related"):
             tr.append(f"{r['label']}: рядом есть пункты с исключением или особым условием — показываю «проверьте также п. "
                       + ", ".join(x["clause"] for x in res["related"]) + "»")
