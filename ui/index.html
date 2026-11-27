@@ -240,7 +240,7 @@ tr.rowlink:hover .chev{color:var(--ink)}
     <button data-p="ask" class="on">Спросить</button>
     <button data-p="docs">Документы</button>
     <button data-p="cases" class="qa hide">Обращения<span class="cnt hide" id="cnt"></span></button>
-    <button data-p="know" class="qa hide">Знания</button>
+    <button data-p="know" class="qa hide">Знания<span class="cnt hide" id="knowCnt"></span></button>
     <button data-p="conf" class="qa hide">Противоречия<span class="cnt hide" id="confCnt"></span></button>
     <button data-p="stats" class="qa hide">Аналитика</button>
     <button data-p="settings" class="qa hide">Настройки</button>
@@ -625,7 +625,10 @@ drop.onsubmit = async e => { e.preventDefault();
   $("#upMsg").textContent = r.error ? "Ошибка: " + r.error : r.new ? "Принят — распознаётся, статус в реестре ниже" : "Этот файл уже в реестре"; drop.reset(); $$("#upForm select").forEach(x => x._dd?.()); $("#newDepBox").classList.add("hide"); $("#fname").textContent = "Перетащите файл сюда"; loadDocs(); };
 
 const CST = {sent:["Новое","r"], in_work:["В работе","a"], answered:["Карточка ждёт подтверждения","a"], published:["Ответ в базе знаний","g"]};
-async function loadCount(){ const c = await api("/api/cases"); const n = c.filter(x => ["sent","in_work"].includes(x.status)).length; $("#cnt").textContent = n; $("#cnt").classList.toggle("hide", !n); fitHeader(); return c; }
+async function loadCount(){ const c = await api("/api/cases"); const n = c.filter(x => ["sent","in_work"].includes(x.status)).length; $("#cnt").textContent = n; $("#cnt").classList.toggle("hide", !n);
+  // карточки, ждущие подтверждения, — тоже счётчиком (владелец 28.11: без него шаг «подтвердить» легко пропустить)
+  const p = await api("/api/practices").catch(() => []); const d = Array.isArray(p) ? p.filter(x => x.status === "draft").length : 0;
+  $("#knowCnt").textContent = d; $("#knowCnt").classList.toggle("hide", !d); fitHeader(); return c; }
 async function loadCases(){
   const c = await loadCount();
   const byCase = {}; (await api("/api/practices").catch(() => [])).forEach(p => { if (p.case_id) byCase[p.case_id] = p; });
@@ -664,7 +667,7 @@ async function loadKnow(){
     : `<div class="empty">Карточек пока нет — они появятся из ответов на обращения</div>`;
   $$("[data-ok]").forEach(b => b.onclick = async () => { const id = b.dataset.ok;
     await api("/api/qa/approve", {practice_id:id, question:$(`[data-q="${id}"]`).value, answer:$(`[data-a="${id}"]`).value, applies_to:$$(`[data-d="${id}"]:checked`).map(i => i.value),
-      destination:($(`[name="dst-${id}"]:checked`)||{}).value || "faq"}); loadKnow(); });
+      destination:($(`[name="dst-${id}"]:checked`)||{}).value || "faq"}); loadKnow(); loadCount(); });
   $$("[data-dst]").forEach(b => b.onclick = async () => { await api("/api/qa/destination", {practice_id:b.dataset.dst, destination:b.dataset.v}); loadKnow(); });
   // заказчик 27.11: ответ СК — в базу ответов или предложение в регламент; подтверждённое противоречие — задача изменить регламент
   const reg = p.filter(x => x.status === "published" && x.destination === "regulation");
