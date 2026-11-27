@@ -173,7 +173,8 @@ nav button{padding:7px 10px}
 .dd .menu button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 12px;border-radius:7px;cursor:pointer;white-space:nowrap}
 .dd .menu button:hover{background:var(--soft)}
 .dd .menu button.on{font-weight:600}
-.dd .menu button.on::after{content:"✓";float:right;margin-left:14px;color:var(--muted)}
+.dd .menu button.on{display:flex;align-items:center}
+.dd .menu button.on::after{content:"✓";margin-left:auto;padding-left:14px;color:var(--muted)}   /* галочка в той же строке, а не под пунктом (владелец 28.11) */
 .dd.right .menu{left:auto;right:0}
 .upgrid{display:grid;grid-template-columns:auto 230px 220px 260px auto;gap:12px 16px;align-items:end;justify-content:center;margin-top:16px}
 .fld{display:flex;flex-direction:column;gap:6px;text-align:left;font-size:12px;color:var(--muted)}
@@ -809,7 +810,7 @@ catch (e) {   // диалог, сохранённый прежней верси�
   console.warn("сохранённые диалоги не открылись, список очищен", e);
   chats = []; cur = null; try { localStorage.removeItem(CHKEY); } catch (_) {} newChat(); }
 // роль переживает обновление страницы (владелец 28.11: в режиме СК обновление возвращало «Сотрудника»)
-try { if (localStorage.getItem("assistant-role") === "qa") { $("#role").value = "qa"; $("#role").onchange(); } } catch (e) {}
+try { if (localStorage.getItem("assistant-role") === "qa") { $("#role").value = "qa"; $("#role")._dd?.(); $("#role").onchange(); } } catch (e) {}
 // автообновление «Обращений» не трогает недописанный ответ эксперта (Fable 27.11: текст стирался каждые 10 с)
 const typing = () => [...document.querySelectorAll("#caseList textarea")].some(t => t.value.trim() || t === document.activeElement);
 setInterval(() => { if (qa) loadCount(); if (!$("#p-cases").classList.contains("hide") && !typing()) loadCases(); }, 10000);
