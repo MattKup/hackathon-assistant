@@ -361,6 +361,8 @@ function render(r){
     h += `<p class="lead">${esc(r.text)}</p>` + (r.case ? handed(r.case) : "");
   } else {
     h += `<p class="lead">${esc(r.text)}</p>` + (r.route ? `<div class="note">Куда обратиться: ${esc(r.route.to)}</div>` : "");
+    // Fable 27.11 / заказчик: «вне регламентов» не должен быть тупиком — сотрудник может сам передать вопрос в СК
+    if (r.outcome === "out_of_scope") h += `<div class="chips"><button class="chip" data-escalate="1" data-reason="сотрудник просит разобрать вопрос, который помощник счёл вне регламентов">Передать в службу качества</button></div>`;
   }
   const nt = r.trace?.length || 0;
   h += `<details class="how"><summary>Как найден ответ · ${nt} ${plural(nt, "шаг", "шага", "шагов")}</summary><ol>${(r.trace||[]).map(t => `<li>${esc(cap(t))}</li>`).join("")}</ol></details>
@@ -387,7 +389,7 @@ function bind(){
   $$("[data-multi]").forEach(b => b.onclick = () => b.closest(".body").querySelector(".multi").classList.remove("hide"));
   $$("[data-multigo]").forEach(b => b.onclick = () => { const ids = [...b.closest(".multi").querySelectorAll("input:checked")].map(i => i.value);
     if (ids.length) { ask("", ids.join(","), "Проект нескольких дирекций: " + ids.map(i => DEP[i]).join(" + ")); $("#ctx").textContent = "· " + ids.map(i => DEP[i]).join(" + "); } });
-  $$("[data-escalate]").forEach(b => b.onclick = async () => { b.disabled = true; const r = await api("/api/escalate", {session});
+  $$("[data-escalate]").forEach(b => b.onclick = async () => { b.disabled = true; const r = await api("/api/escalate", {session, reason: b.dataset.reason});
     b.parentElement.outerHTML = handed(r.case || {error:"нет ответа сервера"}); });
   $$("[data-fb]").forEach(b => b.onclick = () => { b.parentElement.querySelectorAll("[data-fb]").forEach(x => x.classList.remove("on")); b.classList.add("on"); api("/api/feedback", {session, value:b.dataset.fb}); });
 }

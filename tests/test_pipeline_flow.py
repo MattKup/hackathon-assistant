@@ -83,7 +83,7 @@ class VerdictFlowTest(unittest.TestCase):
         t = run_turn("За сколько запускать заявку на расчёт?", REG, search_for(WINS_EXT), llm, session={})
         self.assertEqual(t.outcome, "answer_with_caveat")          # пункт отсылает к документу вне базы
         self.assertEqual([a["label"] for a in t.answers], ["ДБРЦТ"])
-        self.assertIn("не сказано", t.text)
+        self.assertIn("Прямого ответа не нашёл", t.text)
         self.assertEqual(t.external_refs, ["Регламент подбора субподрядчика"])   # процитирован п. ДБРЦТ 1.5
 
     def test_all_no_answer_escalate_or_out_of_scope(self):
