@@ -160,6 +160,38 @@ footer{max-width:1280px;margin:0 auto;padding:0 24px 28px;display:flex;justify-c
 nav button{padding:7px 10px}
 @media (max-width:1000px){.ask{grid-template-columns:1fr}.source{position:static}.grid2{grid-template-columns:1fr}.steps5{grid-template-columns:1fr 1fr}nav{overflow:auto}header .wrap{height:auto;flex-wrap:wrap;padding-top:10px;padding-bottom:10px}.hright{margin-left:0}}
 @media (max-width:600px){.wrap{padding:0 16px}.local{display:none}.ph h1{font-size:22px}}
+/* правки владельца 27.11: переключатели, свой выпадающий список, форма загрузки, просмотр документа */
+.hd .opt{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap;line-height:20px}
+.hd .opt input{margin:0;width:16px;height:16px;accent-color:var(--ink);flex:none;cursor:pointer}
+.hd .opt:hover{color:var(--ink)}
+.hd .opt+.opt{margin-left:6px}
+.dd{position:relative;display:inline-block}
+.dd>button{border:1px solid var(--line2);background:var(--card);border-radius:10px;padding:8px 36px 8px 14px;cursor:pointer;text-align:left;white-space:nowrap;width:100%;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23697279' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center}
+.dd>button:hover,.dd.open>button{border-color:var(--ink)}
+.dd .menu{position:absolute;top:calc(100% + 6px);left:0;min-width:100%;background:var(--card);border:1px solid var(--line2);border-radius:10px;box-shadow:0 10px 28px rgba(16,24,32,.14);padding:4px;z-index:30}
+.dd .menu button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 12px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.dd .menu button:hover{background:var(--soft)}
+.dd .menu button.on{font-weight:600}
+.dd .menu button.on::after{content:"✓";float:right;margin-left:14px;color:var(--muted)}
+.dd.right .menu{left:auto;right:0}
+.upgrid{display:grid;grid-template-columns:auto 250px 300px auto;gap:12px 16px;align-items:end;justify-content:center;margin-top:16px}
+.fld{display:flex;flex-direction:column;gap:6px;text-align:left;font-size:12px;color:var(--muted)}
+.fld input{height:42px;border:1px solid var(--line2);background:var(--card);border-radius:10px;padding:0 12px;width:100%}
+.fld .dd{width:100%}.fld .dd>button{height:42px}
+.upgrid .pick,.upgrid .btn{height:42px;display:inline-flex;align-items:center;justify-content:center}
+.upgrid .newdep{grid-column:2}
+header.tight .local{display:none}
+header.tight2 .logo .t,header.tight2 .logo .s{display:none}
+.modal{position:fixed;inset:0;background:rgba(16,24,32,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:50}
+.modal>.card{width:min(920px,100%);max-height:calc(100vh - 80px);display:flex;flex-direction:column}
+.modal .bd{overflow:auto}
+.doctext .cl{margin:0 0 10px;line-height:1.6;white-space:pre-wrap}
+.doctext h3{font-size:15px;margin:20px 0 8px}
+.flash{animation:fl 2.4s}
+@keyframes fl{from{box-shadow:inset 0 0 0 2px var(--brand)}to{box-shadow:inset 0 0 0 2px transparent}}
+.linkbtn{border:0;background:none;color:var(--brand);cursor:pointer;padding:0;font:inherit}
+.linkbtn:hover{text-decoration:underline}
+@media (max-width:1000px){.upgrid{grid-template-columns:1fr}.upgrid .newdep{grid-column:auto}}
 </style>
 </head>
 <body>
@@ -177,7 +209,7 @@ nav button{padding:7px 10px}
     <button data-p="about">О системе</button>
   </nav>
   <div class="hright">
-    <select class="pill" id="role"><option value="emp">Вы: Сотрудник</option><option value="qa">Вы: Служба качества</option></select>
+    <select class="pill" id="role" data-right="1"><option value="emp">Вы: Сотрудник</option><option value="qa">Вы: Служба качества</option></select>
     <span class="local"><i></i>Локально · данные не покидают сервер</span>
   </div>
 </div></header>
@@ -187,7 +219,7 @@ nav button{padding:7px 10px}
   <div class="ph"><div><h1>Спросить</h1><p>Ответ по регламентам проектной деятельности — с точными пунктами</p></div></div>
   <div class="ask">
     <div class="card dialog">
-      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="meta ml" title="Без уточняющих вопросов: сразу ответы по всем дирекциям"><input type="checkbox" id="noClarify"> без уточнений</label><label class="meta" title="Экспериментальная опция: если рядом с процитированным пунктом есть пункт с исключением или особым условием по той же теме, помощник покажет его дословно — «проверьте также п. X». Подсказку строит код, без модели. На наших 4 регламентах чаще даёт лишние пункты, чем нужные; польза ожидается на большой базе и с другой моделью."><input type="checkbox" id="hints"> подсказки «проверьте также»</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
+      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="opt ml" title="Не спрашивать дирекцию: сразу ответы по всем дирекциям, где это описано"><input type="checkbox" id="noClarify">Сразу по всем дирекциям</label><label class="opt" title="Экспериментальная опция: если рядом с процитированным пунктом есть пункт с исключением или особым условием по той же теме, помощник покажет его дословно — «проверьте также п. X». Подсказку строит код, без модели. На наших 4 регламентах чаще даёт лишние пункты, чем нужные; польза ожидается на большой базе и с другой моделью."><input type="checkbox" id="hints">Связанные пункты</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
       <div class="msgs" id="msgs">
         <div class="empty" id="empty">Спросите о пресейле, расчёте, ТКП, договоре, старте или ведении проекта.<br>Если ответа нет в регламентах — передам вопрос в службу качества.
           <div class="examples">
@@ -210,21 +242,24 @@ nav button{padding:7px 10px}
   <div class="ph"><div><h1>Документы</h1><p>Реестр регламентов, по которым отвечает помощник</p></div></div>
   <div class="kpis" id="docKpis"></div>
   <div class="card qa hide" style="margin-bottom:16px">
-    <div class="hd"><b>Загрузить регламент</b><span class="sub">DOCX разбирается сразу; PDF, сканы и фото — распознаются doc-intel на этом сервере</span></div>
-    <div class="bd"><form id="upForm" class="drop">
-      <input type="file" name="file" id="upFile" accept=".docx,.pdf,.png,.jpg,.jpeg,.tif,.tiff" required>
+    <div class="hd"><b>Загрузить регламент</b><span class="sub">DOCX, HTML, TXT разбираются сразу; PDF, DOC, RTF, ODT, сканы и фото — распознаются doc-intel на этом сервере</span></div>
+    <div class="bd"><form id="upForm" class="drop" novalidate>
+      <input type="file" name="file" id="upFile" accept=".docx,.doc,.rtf,.odt,.pdf,.html,.htm,.txt,.md,.png,.jpg,.jpeg,.tif,.tiff">
       <div class="fname" id="fname">Перетащите файл сюда</div>
-      <div class="meta">DOCX, PDF, PNG, JPEG, TIFF · до 50 МБ</div>
-      <div class="row1"><label class="pick" for="upFile">📎 Выбрать файл</label>
-        <label class="meta" style="display:flex;flex-direction:column;gap:2px">Подразделение (выберите или впишите новое)<input class="pill" name="department" list="deptList" value="TECH" title="Код подразделения: выберите или введите новый" style="width:150px"><datalist id="deptList"><option value="TECH">Техническая дирекция</option><option value="IB">Дирекция ИБ</option><option value="DBRCT">ДБРЦТ</option></datalist></label>
-        <label class="meta" style="display:flex;flex-direction:column;gap:2px">Какие этапы сделки описывает<select class="pill" name="stage" title="Нужно, если у подразделения отдельные регламенты на пресейл и на реализацию проекта (как у Дирекции ИБ)"><option value="full_cycle">Весь цикл: пресейл и реализация</option><option value="presale">Только пресейл</option><option value="project">Только реализацию проекта</option></select></label>
-        <button class="btn">Загрузить и распознать</button></div>
-      <span class="meta" id="upMsg"></span>
+      <div class="meta">DOCX, DOC, RTF, ODT, PDF, HTML, TXT, MD, PNG, JPEG, TIFF · до 50 МБ</div>
+      <div class="upgrid">
+        <label class="pick" for="upFile">📎 Выбрать файл</label>
+        <div class="fld">Подразделение<select class="pill" name="department" id="upDept"></select></div>
+        <div class="fld" title="Нужно, только если у подразделения отдельные регламенты на пресейл и на проект (как у Дирекции ИБ). Общий регламент — «Весь цикл».">Этап сделки<select class="pill" name="stage"><option value="full_cycle">Весь цикл — пресейл и проект</option><option value="presale">Только пресейл</option><option value="project">Только проект</option></select></div>
+        <button class="btn">Загрузить и распознать</button>
+        <div class="fld newdep hide" id="newDepBox">Название нового подразделения<input name="department_name" id="newDep" placeholder="например, Отдел закупок" autocomplete="off"></div>
+      </div>
+      <span class="meta" id="upMsg" style="margin-top:10px"></span>
     </form></div>
   </div>
   <div class="card">
     <div class="hd"><b>Реестр документов</b><span class="sub" id="docCount"></span><input class="search ml" id="docSearch" placeholder="Поиск по названию…"></div>
-    <div class="tbl"><table><thead><tr><th>Название документа</th><th>Дирекция</th><th>Стадия</th><th>Источник</th><th>Пунктов</th><th>Статус</th><th class="qa hide"></th></tr></thead><tbody id="docRows"></tbody></table></div>
+    <div class="tbl"><table><thead><tr><th>Название документа</th><th>Дирекция</th><th>Стадия</th><th>Источник</th><th>Пунктов</th><th>Статус</th><th></th></tr></thead><tbody id="docRows"></tbody></table></div>
   </div>
 </section>
 
@@ -318,11 +353,13 @@ async function loadSettings(){
 }
 $$("#nav button").forEach(b => b.onclick = () => go(b.dataset.p));
 $("#role").onchange = () => { qa = $("#role").value === "qa"; $$(".qa").forEach(x => x.classList.toggle("hide", !qa));
-  const cur = $("#nav button.on").dataset.p; go(!qa && ["cases","know","conf","stats","settings"].includes(cur) ? "ask" : cur); if (qa) loadCount(); };
+  const cur = $("#nav button.on").dataset.p; go(!qa && ["cases","know","conf","stats","settings"].includes(cur) ? "ask" : cur); if (qa) loadCount(); fitHeader(); };
 
-$$(".examples button").forEach(b => b.onclick = () => ask(b.textContent));
+bindExamples();
 $("#askForm").onsubmit = e => { e.preventDefault(); const v = $("#q").value.trim(); if (v) { $("#q").value = ""; ask(v); } };
-$("#newChat").onclick = async () => { if (session) await api("/api/reset", {session}); session = null; notes = []; $("#msgs").innerHTML = ""; $("#ctx").textContent = "";
+const EMPTY = $("#msgs").innerHTML;   // приветствие и примеры вопросов — возвращаются в новом диалоге
+function bindExamples(){ $$(".examples button").forEach(b => b.onclick = () => ask(b.textContent)); }
+$("#newChat").onclick = async () => { if (session) await api("/api/reset", {session}); session = null; notes = []; $("#msgs").innerHTML = EMPTY; bindExamples(); $("#ctx").textContent = "";
   $("#srcBody").innerHTML = `<div class="meta">Нажмите на сноску в ответе — здесь откроется пункт регламента.</div>`; };
 
 function add(html, who){ $("#empty")?.remove(); const d = document.createElement("div"); d.className = "m " + who;
@@ -424,6 +461,12 @@ async function loadDocs(){
   const ready = docs.filter(d => d.windows);
   $("#docKpis").innerHTML = kpi("Документов", ready.length, "действующих") + kpi("Пунктов в индексе", ready.reduce((a,d) => a + (d.windows||0), 0), "помощник ищет по ним")
     + kpi("Загружено службой качества", docs.filter(d => d.source === "загружен").length, "через этот интерфейс") + kpi("Распознано OCR", docs.reduce((a,d) => a + (d.ocr_pages||0), 0) + " стр.", "сканы и PDF через doc-intel");
+  // подразделения для загрузки — из реестра (по-русски, как в регламентах) + новое
+  const deps = {}; docs.forEach(d => { if (d.department) deps[d.department] ||= DEP[d.department] || d.department_name || d.department; });
+  const cur = $("#upDept").value;
+  $("#upDept").innerHTML = Object.entries(deps).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("") + `<option value="">＋ Новое подразделение…</option>`;
+  if (cur && deps[cur]) $("#upDept").value = cur;
+  $("#upDept")._dd?.();
   drawDocs();
   if (docs.some(d => d.status === "распознаётся…")) setTimeout(() => !$("#p-docs").classList.contains("hide") && loadDocs(), 3000);
 }
@@ -431,9 +474,10 @@ function drawDocs(){
   const f = $("#docSearch").value.toLowerCase(), rows = docs.filter(d => d.display_title.toLowerCase().includes(f));
   $("#docCount").textContent = `${rows.length} в реестре`;
   $("#docRows").innerHTML = rows.map(d => `<tr><td><div class="ttl"><span>📄</span><div>${esc(d.display_title)}${d.pages ? `<div class="meta">${d.pages} стр.${d.ocr_pages ? " · распознано " + d.ocr_pages : ""}</div>` : ""}</div></div></td>
-    <td>${esc(DEP[d.department] || "")}</td><td>${STAGE[d.stage] || ""}</td><td class="meta">${esc(d.source)}</td><td>${d.windows ?? "—"}</td>
+    <td>${esc(DEP[d.department] || d.department_name || d.department || "")}</td><td>${STAGE[d.stage] || ""}</td><td class="meta">${esc(d.source)}</td><td>${d.windows ?? "—"}</td>
     <td>${d.status === "действует" ? `<span class="badge g">Действует</span>` : d.status.startsWith("ошибка") ? `<span class="badge r">${esc(d.status)}</span>` : `<span class="badge a"><span class="spin"></span> ${esc(d.status)}</span>`}</td>
-    <td class="qa ${qa ? "" : "hide"}">${d.source === "загружен" ? `<button class="btn ghost" data-rm="${d.doc_id}">Убрать</button>` : ""}</td></tr>`).join("");
+    <td style="white-space:nowrap">${d.windows ? `<button class="btn ghost" data-open="${d.doc_id}">Открыть</button>` : ""}${qa && d.source === "загружен" ? ` <button class="btn ghost" data-rm="${d.doc_id}">Убрать</button>` : ""}</td></tr>`).join("");
+  $$("[data-open]").forEach(b => b.onclick = () => openDoc(b.dataset.open));
   $$("[data-rm]").forEach(b => b.onclick = async () => { await api("/api/docs/remove", {doc_id:b.dataset.rm}); loadDocs(); });
 }
 $("#docSearch").oninput = drawDocs;
@@ -442,23 +486,30 @@ const drop = $("#upForm");
 ["dragleave","drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", ev => { if (ev.dataTransfer.files[0]) { $("#upFile").files = ev.dataTransfer.files; $("#fname").textContent = ev.dataTransfer.files[0].name; } });
 $("#upFile").onchange = () => { $("#fname").textContent = $("#upFile").files[0]?.name || "Перетащите файл сюда"; };
-drop.onsubmit = async e => { e.preventDefault(); $("#upMsg").innerHTML = `<span class="spin"></span> Загружаю…`;
+$("#upDept").addEventListener("change", () => { $("#newDepBox").classList.toggle("hide", $("#upDept").value !== ""); if (!$("#upDept").value) $("#newDep").focus(); });
+drop.onsubmit = async e => { e.preventDefault();
+  if (!$("#upFile").files.length) { $("#upMsg").textContent = "Сначала выберите файл или перетащите его в рамку"; return; }
+  if (!$("#upDept").value && !$("#newDep").value.trim()) { $("#upMsg").textContent = "Впишите название нового подразделения"; $("#newDep").focus(); return; }
+  $("#upMsg").innerHTML = `<span class="spin"></span> Загружаю…`;
   const r = await fetch("/api/docs/upload", {method:"POST", body:new FormData(drop)}).then(r => r.json()).catch(e => ({error:String(e)}));
-  $("#upMsg").textContent = r.error ? "Ошибка: " + r.error : r.new ? "Принят — распознаётся, статус в реестре ниже" : "Этот файл уже в реестре"; drop.reset(); $("#fname").textContent = "Перетащите файл сюда"; loadDocs(); };
+  $("#upMsg").textContent = r.error ? "Ошибка: " + r.error : r.new ? "Принят — распознаётся, статус в реестре ниже" : "Этот файл уже в реестре"; drop.reset(); $$("#upForm select").forEach(x => x._dd?.()); $("#newDepBox").classList.add("hide"); $("#fname").textContent = "Перетащите файл сюда"; loadDocs(); };
 
 const CST = {sent:["Новое","r"], in_work:["В работе","a"], answered:["Карточка ждёт подтверждения","a"], published:["Ответ в базе знаний","g"]};
-async function loadCount(){ const c = await api("/api/cases"); const n = c.filter(x => ["sent","in_work"].includes(x.status)).length; $("#cnt").textContent = n; $("#cnt").classList.toggle("hide", !n); return c; }
+async function loadCount(){ const c = await api("/api/cases"); const n = c.filter(x => ["sent","in_work"].includes(x.status)).length; $("#cnt").textContent = n; $("#cnt").classList.toggle("hide", !n); fitHeader(); return c; }
 async function loadCases(){
   const c = await loadCount();
+  const byCase = {}; (await api("/api/practices").catch(() => [])).forEach(p => { if (p.case_id) byCase[p.case_id] = p; });
   $("#caseKpis").innerHTML = kpi("Всего обращений", c.length) + kpi("Ждут ответа", c.filter(x => x.status === "sent").length) + kpi("В работе", c.filter(x => x.status === "in_work").length)
     + kpi("Закрыто знанием", c.filter(x => x.status === "published").length, "ответ стал карточкой");
-  $("#caseList").innerHTML = c.length ? c.map(x => { const [st, cl] = CST[x.status] || [x.status, ""], fr = JSON.parse(x.fragments); return `<div class="mailcard">
+  $("#caseList").innerHTML = c.length ? c.map(x => { const [st, cl] = CST[x.status] || [x.status, ""], fr = JSON.parse(x.fragments), pr = byCase[x.case_id]; return `<div class="mailcard" id="case-${esc(x.case_id)}">
     <div style="display:flex;gap:10px;align-items:center"><b>${esc(x.question)}</b><span class="badge ${cl} ml">${st}</span></div>
+    ${pr ? `<div class="meta">Карточка знания: <button class="linkbtn" data-goknow="${esc(pr.practice_id)}">${esc(pr.practice_id)} — ${pr.status === "draft" ? "подтвердить" : pr.status === "published" ? "в базе знаний" : "отозвана"} →</button></div>` : ""}
     <div class="meta">От: помощник · Кому: служба качества · Копия: ${esc(x.employee || "—")} · ${new Date(x.created*1000).toLocaleString("ru")}</div>
-    <pre>Дирекция: ${esc(JSON.parse(x.departments).join(", ") || "не определена")}\nПочему помощник не ответил: ${esc(x.reason)}${fr.length ? "\nБлизкие пункты: " + fr.slice(0,3).map(f => esc(f.doc) + " п. " + esc(f.clause)).join("; ") : ""}</pre>
+    <pre>Дирекция: ${esc(JSON.parse(x.departments).map(d => DEP[d] || d).join(", ") || "не определена")}\nПочему помощник не ответил: ${esc(x.reason)}${fr.length ? "\nБлизкие пункты: " + fr.slice(0,3).map(f => esc(f.doc) + " п. " + esc(f.clause)).join("; ") : ""}</pre>
     ${["sent","in_work"].includes(x.status) ? `<textarea data-c="${x.case_id}" placeholder="Ответ службы качества (уйдёт в тот же почтовый тред, сотрудник в копии)…"></textarea>
       <div class="foot"><button class="btn" data-reply="${x.case_id}">Ответить</button><span class="meta">промежуточный ответ («уточняю у коллег») в базу не попадёт</span></div>` : ""}</div>`; }).join("")
     : `<div class="empty">Обращений пока нет</div>`;
+  $$("[data-goknow]").forEach(b => b.onclick = () => jump("know", "#know-" + CSS.escape(b.dataset.goknow)));
   $$("[data-reply]").forEach(b => b.onclick = async () => { const t = $(`[data-c="${b.dataset.reply}"]`).value.trim(); if (!t) return;
     b.disabled = true; b.innerHTML = `<span class="spin"></span> Отправляю`; await api("/api/qa/reply", {case_id:b.dataset.reply, text:t}); await api("/api/qa/poll", {}); loadCases(); });
 }
@@ -467,8 +518,8 @@ async function loadKnow(){
   const p = (await api("/api/practices")).slice().reverse();
   $("#knowCount").textContent = `${p.filter(x => x.status === "published").length} в базе · ${p.filter(x => x.status === "draft").length} ждут подтверждения`;
   const ST = {draft:["Ждёт подтверждения","a"], published:["В базе знаний","g"], revoked:["Отозвана",""]};
-  $("#knowList").innerHTML = p.length ? p.map(x => { const [st, cl] = ST[x.status] || [x.status, ""]; return `<div class="mailcard">
-    <div style="display:flex;gap:10px;align-items:center"><b>Карточка ${esc(x.practice_id)}</b><span class="meta">из ответа ${esc(x.expert)} · ${new Date(x.created*1000).toLocaleString("ru")}</span><span class="badge ${cl} ml">${st}</span></div>
+  $("#knowList").innerHTML = p.length ? p.map(x => { const [st, cl] = ST[x.status] || [x.status, ""]; return `<div class="mailcard" id="know-${esc(x.practice_id)}">
+    <div style="display:flex;gap:10px;align-items:center"><b>Карточка ${esc(x.practice_id)}</b><span class="meta">из ответа ${esc(x.expert)} · ${new Date(x.created*1000).toLocaleString("ru")}${x.case_id ? ` · <button class="linkbtn" data-gocase="${esc(x.case_id)}">обращение ${esc(x.case_id)} →</button>` : ""}</span><span class="badge ${cl} ml">${st}</span></div>
     ${x.status === "draft" ? `<div class="lbl">Вопрос — общий вид и формулировки</div><textarea data-q="${x.practice_id}">${esc(x.question)}</textarea>
       <div class="lbl">Ответ службы качества</div><textarea data-a="${x.practice_id}">${esc(x.answer)}</textarea>
       <div class="lbl">Для каких дирекций</div><div class="chips" style="margin-top:0">${["TECH","IB","DBRCT"].map(d => `<label class="chip"><input type="checkbox" data-d="${x.practice_id}" value="${d}" ${x.applies_to.includes(d) ? "checked" : ""}> ${DEP[d]}</label>`).join("")}</div>
@@ -494,6 +545,7 @@ async function loadKnow(){
       + dsc.map(d => `<div class="mailcard"><b>Разъяснение службы качества расходится с регламентом</b> <span class="meta">${esc(d.department)} · ${new Date(d.created*1000).toLocaleString("ru")}</span><pre>${esc(d.question)}</pre><div class="note">${esc(d.note)} — сотруднику дан ответ по регламенту; изменить регламент или отозвать карточку</div></div>`).join("")
       + cfl.map(c => `<div class="mailcard"><b>Устранить противоречие</b> <span class="meta">${esc(DEP[c.department] || c.department || "")} · п. ${esc(c.clause_a)} ↔ п. ${esc(c.clause_b)}</span><div class="note">${esc(c.explanation || "")}</div></div>`).join("")
     : `<div class="empty">Пока пусто — сюда попадают ответы службы качества, которые эксперт решил закрепить в регламенте, подтверждённые противоречия и расхождения разъяснений с регламентом</div>`;
+  $$("[data-gocase]").forEach(b => b.onclick = () => jump("cases", "#case-" + CSS.escape(b.dataset.gocase)));
   $$("[data-rv]").forEach(b => b.onclick = async () => { await api("/api/qa/revoke", {practice_id:b.dataset.rv}); loadKnow(); });
 }
 
@@ -502,7 +554,7 @@ const KKIND = {contradiction:"противоречие", possible:"возмож�
 async function loadConf(){
   const all = await api("/api/conflicts"), f = $("#confFilter").value, rows = f ? all.filter(x => x.status === f) : all;
   const n = st => all.filter(x => x.status === st).length, cand = n("candidate");
-  $("#confCnt").textContent = cand; $("#confCnt").classList.toggle("hide", !cand);
+  $("#confCnt").textContent = cand; $("#confCnt").classList.toggle("hide", !cand); fitHeader();
   $("#confKpis").innerHTML = kpi("Ждут решения", cand) + kpi("Подтверждено", n("confirmed"), "применяются в ответах")
     + kpi("Не противоречие", n("rejected")) + kpi("Текст пункта изменился", all.filter(x => x.status === "confirmed" && !x.current).length, "нужно подтвердить заново");
   $("#confSub").textContent = `${rows.length} из ${all.length}`;
@@ -560,6 +612,62 @@ async function loadAbout(){
     <td>${x.questions}</td><td>${x.outcome_ok} · ${pc(x.outcome_ok, x.questions)}</td><td>${pc(x.cite_hit, x.cite_total)}</td>
     <td>${fmt(x.p50)} / ${fmt(x.p95)} с</td><td class="meta">${esc(x.commit)}</td></tr>`).join("");
 }
+// просмотр документа целиком (владелец 27.11: «поиск есть, а прочитать нельзя»)
+async function openDoc(id, find){
+  const d = await api("/api/doc?id=" + encodeURIComponent(id));
+  if (d.error) return;
+  const m = document.createElement("div"); m.className = "modal";
+  m.innerHTML = `<div class="card"><div class="hd"><b>${esc(d.title)}</b><span class="sub">${esc(d.department_name)} · ${d.items.filter(x => x.kind !== "section_title").length} пунктов</span>
+    <input class="search ml" placeholder="Найти в документе…" value="${esc(find || "")}"><button class="btn ghost" data-x="1">Закрыть</button></div>
+    <div class="bd doctext"></div></div>`;
+  document.body.appendChild(m);
+  const body = m.querySelector(".doctext"), inp = m.querySelector("input");
+  const draw = () => { const f = inp.value.trim().toLowerCase(); let first = null;
+    body.innerHTML = d.items.map((x, i) => {
+      let t = esc(x.text);
+      if (f && x.text.toLowerCase().includes(f)) { t = t.replace(new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), y => `<mark>${y}</mark>`); first ??= i; }
+      return x.kind === "section_title" ? `<h3 data-i="${i}">${t}</h3>` : `<p class="cl" data-i="${i}">${t}</p>`; }).join("");
+    if (first !== null) body.querySelector(`[data-i="${first}"]`).scrollIntoView({block:"center"}); };
+  inp.oninput = draw; draw();
+  const close = () => { m.remove(); document.removeEventListener("keydown", esc_); };
+  const esc_ = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", esc_);
+  m.onclick = e => { if (e.target === m || e.target.dataset.x) close(); };
+}
+
+// выпадающий список: своё меню под полем вместо системного (владелец 27.11: системное перекрывало поле)
+function dd(sel){
+  const w = document.createElement("div"); w.className = "dd" + (sel.dataset.right ? " right" : "");
+  const b = document.createElement("button"); b.type = "button"; w.appendChild(b);
+  sel.after(w); sel.classList.add("hide");
+  const refresh = () => { b.textContent = sel.options[sel.selectedIndex]?.text || ""; };
+  b.onclick = e => { e.stopPropagation(); const open = w.classList.contains("open"); closeDD(); if (open) return;
+    const menu = document.createElement("div"); menu.className = "menu";
+    [...sel.options].forEach(o => { const it = document.createElement("button"); it.type = "button"; it.textContent = o.text;
+      if (o.value === sel.value) it.className = "on";
+      it.onclick = ev => { ev.stopPropagation(); sel.value = o.value; refresh(); closeDD(); sel.dispatchEvent(new Event("change")); };
+      menu.appendChild(it); });
+    w.appendChild(menu); w.classList.add("open"); };
+  sel._dd = refresh; refresh();
+}
+const closeDD = () => $$(".dd.open").forEach(w => { w.classList.remove("open"); w.querySelector(".menu")?.remove(); });
+document.addEventListener("click", closeDD);
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDD(); });
+$$("select.pill").forEach(dd);
+
+// шапка: если вкладки не помещаются — сначала прячем плашку «Локально», затем подпись логотипа
+function fitHeader(){
+  const h = $("header"), n = $("#nav"); h.classList.remove("tight", "tight2");
+  if (n.scrollWidth > n.clientWidth + 4) h.classList.add("tight");
+  if (n.scrollWidth > n.clientWidth + 4) h.classList.add("tight2");
+}
+window.addEventListener("resize", fitHeader); fitHeader();
+
+// обращения ↔ карточки знаний: переход и подсветка
+function jump(page, sel){ go(page); let n = 0;
+  const t = setInterval(() => { const el = $(sel); if (el || ++n > 30) { clearInterval(t);
+    if (el) { el.scrollIntoView({block:"center", behavior:"smooth"}); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 2500); } } }, 100); }
+
 setInterval(() => { if (qa) loadCount(); if (!$("#p-cases").classList.contains("hide")) loadCases(); }, 10000);
 </script>
 </body>

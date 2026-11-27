@@ -19,7 +19,21 @@ from app.parsers.docx_simple import Para, parse as parse_docx
 SCHEMA = """create table if not exists uploads(
   doc_id text primary key, created real, file_name text, department text, stage text, status text,
   parser text, pages integer, ocr_pages integer, blocks integer, windows integer, chars integer, error text, job_id text)"""
-EXT_OK = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".html", ".htm"}
+EXT_OK = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".html", ".htm", ".txt", ".md",
+          ".doc", ".rtf", ".odt"}          # DOC/RTF/ODT — через doc-intel; TXT/MD — разбор здесь
+FORMATS = "DOCX, DOC, RTF, ODT, PDF, HTML, TXT, MD, PNG, JPEG, TIFF"
+
+
+def parse_text(text):
+    """TXT/Markdown: абзац — строка (пустые пропускаются); «# Заголовок» — заголовок уровня по числу #."""
+    out = []
+    for line in text.splitlines():
+        t = line.strip()
+        if not t:
+            continue
+        lvl = len(t) - len(t.lstrip("#")) if t.startswith("#") else 0
+        out.append(Para(len(out), t.lstrip("#").strip() if lvl else t, is_list=t[:2] in ("- ", "* "), level=min(lvl, 6)))
+    return out
 
 
 def parse_multipart(content_type, body):
@@ -71,6 +85,8 @@ class Uploads:
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute(SCHEMA)
+        if "department_name" not in {c[1] for c in self.db.execute("pragma table_info(uploads)")}:
+            self.db.execute("alter table uploads add column department_name text")   # название нового подразделения
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.di = docintel_url.rstrip("/")
@@ -84,18 +100,18 @@ class Uploads:
         self.db.execute(f"update uploads set {cols} where doc_id=?", (*kw.values(), doc_id))
         self.db.commit()
 
-    def accept(self, file_name, data, department, stage):
+    def accept(self, file_name, data, department, stage, department_name=""):
         ext = Path(file_name).suffix.lower()
         if ext not in EXT_OK:
-            raise ValueError(f"формат {ext or '?'} не поддерживается (DOCX, PDF, PNG, JPEG, TIFF)")
+            raise ValueError(f"формат {ext or '?'} не поддерживается ({FORMATS})")
         if len(data) > 50 * 1024 * 1024:
             raise ValueError("файл больше 50 МБ")
         sha = hashlib.sha256(data).hexdigest()
         if self.db.execute("select 1 from uploads where doc_id=?", (sha,)).fetchone():
             return sha, False
         (self.folder / f"{sha}{ext}").write_bytes(data)
-        self.db.execute("insert into uploads(doc_id, created, file_name, department, stage, status, parser) values(?,?,?,?,?,?,?)",
-                        (sha, time.time(), file_name, department, stage, "processing", "docx_simple" if ext == ".docx" else ("html_simple" if ext in (".html", ".htm") else "doc-intel")))
+        self.db.execute("insert into uploads(doc_id, created, file_name, department, stage, status, parser, department_name) values(?,?,?,?,?,?,?,?)",
+                        (sha, time.time(), file_name, department, stage, "processing", "docx_simple" if ext == ".docx" else ("html_simple" if ext in (".html", ".htm") else ("text" if ext in (".txt", ".md") else "doc-intel")), department_name or None))
         self.db.commit()
         return sha, True
 
@@ -109,6 +125,13 @@ class Uploads:
             elif path.suffix.lower() in (".html", ".htm"):           # страница Confluence / выгрузка wiki
                 from app.parsers.html_simple import parse_html
                 paras, pages, ocr = parse_html(path.read_text(errors="replace")), 1, 0
+            elif path.suffix.lower() in (".txt", ".md"):
+                raw = path.read_bytes()
+                try:
+                    txt = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    txt = raw.decode("cp1251", errors="replace")      # выгрузки из Windows
+                paras, pages, ocr = parse_text(txt), 1, 0
             else:
                 ir, job = self._docintel(path, doc_id)
                 paras = ir_to_paras(ir)
@@ -118,7 +141,7 @@ class Uploads:
             title = paras[0].text[:150] if paras else Path(r["file_name"]).stem
             cfg = json.loads((Path(__file__).resolve().parents[2] / "config" / "documents.json").read_text())
             doc = {"doc_id": doc_id, "file_name": r["file_name"], "title": title, "display_title": Path(r["file_name"]).stem,
-                   "department": r["department"], "department_name": cfg["departments"].get(r["department"], r["department"]),
+                   "department": r["department"], "department_name": r["department_name"] or cfg["departments"].get(r["department"], r["department"]),
                    "stage": r["stage"], "status": "active", "uploaded": True,
                    "status_reason": "загружен службой качества", "parser": r["parser"], "paragraphs": len(paras),
                    "chars": sum(len(p.text) for p in paras)}

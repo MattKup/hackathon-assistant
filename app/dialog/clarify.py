@@ -48,6 +48,26 @@ def mentioned(question, registry):
     return out
 
 
+# Короткое продолжение «а по ДБРЦТ?», «а в ИБ как?» — только название дирекции и служебные слова:
+# это тот же вопрос для другой дирекции, а не новый (владелец 27.11: «а по дбрц» уводило в выбор темы).
+_FILLER = set("а и ну но теперь тогда для по в во у как насчёт насчет что про это там с со же ли а у а в "
+              "дирекции дирекция дирекцию департамент департамента подразделение подразделения отдел отдела "
+              "там тоже также так".split())
+
+
+def dept_followup(question, registry):
+    """Документы названной дирекции, если реплика — только «а по <дирекция>»; иначе []."""
+    q = question.lower()
+    found = mentioned(question, registry)
+    if not found:
+        return []
+    for pats in _aliases(registry).values():
+        for p in pats:
+            q = re.sub(p, " ", q)
+    words = re.findall(r"\w+", q)
+    return found if all(w in _FILLER for w in words) else []
+
+
 def label(doc, registry):
     """Короткая подпись документа: подразделение (+ стадия, если у подразделения несколько документов)."""
     same = [d for d in registry if d["department"] == doc["department"]]

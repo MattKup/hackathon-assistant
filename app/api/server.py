@@ -16,7 +16,7 @@ from pathlib import Path
 
 from app.analysis.registry import ConflictRegistry
 from app.answer.cache import AnswerCache
-from app.dialog.clarify import label
+from app.dialog.clarify import dept_followup, label
 from app.escalation import draft as qa_draft
 from app.escalation import mail
 from app.escalation import repeats
@@ -138,11 +138,14 @@ class App:
             self.conflicts = None                 # перечитать реестр противоречий с новым текстом пунктов
 
     # --- загрузка документов (служба качества) ---
-    def upload(self, file_name, data, department, stage):
+    def upload(self, file_name, data, department, stage, department_name=""):
         import re as _re
+        department_name = " ".join((department_name or "").split())[:80]
+        if department_name and not department:      # новое подразделение: код — из названия, название — как ввели
+            department = department_name
         department = _re.sub(r"[^\w]", "", (department or "").upper())[:24] or "OTHER"   # новое подразделение — любым кодом
         stage = stage if stage in ("presale", "project", "full_cycle") else "full_cycle"
-        doc_id, new = self.uploads.accept(file_name, data, department, stage)
+        doc_id, new = self.uploads.accept(file_name, data, department, stage, department_name)
         if new:
             threading.Thread(target=self._process_upload, args=(doc_id,), daemon=True).start()
         return doc_id, new
@@ -236,17 +239,23 @@ class App:
             s["docs"] = [d["doc_id"] for d in self.registry if d["department"] in chosen]
             s["clarifications"] += 1
             s["complex"] = choice == "*" or "," in choice
+        elif q and s.get("last_q") and (fu := dept_followup(q, self.registry)):
+            q = s["last_q"]                          # «а по ДБРЦТ?» — прошлый вопрос для названной дирекции
+            s["docs"] = fu
+            s["complex"] = False
+            s.pop("ask", None)
         elif q:
             s["complex"] = False
             s["clarifications"] = 0                  # бюджет уточнений — на вопрос, а не на весь чат (Fable К1)
-            s.pop("cache", None)
-            s.pop("ask", None)
+            s.pop("ask", None)                       # кэш ответов по дирекциям не сбрасываем: он привязан к тексту вопроса,
+                                                     # повтор вопроса в том же чате отвечается сразу (владелец 27.11: 19 с)
         t0 = time.time()
         if getattr(self, "conflicts", None) is None:
             self.conflicts = load_conflicts(self.windows, self.conflict_reg.confirmed())   # только подтверждённые СК
             self.index = build_index(self.windows)                  # пункты по номеру — для агентного прохода
         turn = run_turn(q, self.registry, self.search, self.llm, session=s, answer_cache=self.answer_cache,
                         conflicts=self.conflicts, index=self.index)   # s хранит кэш ответов по дирекциям для второго хода
+        s["last_q"] = turn.question or q             # для продолжений «а по <дирекция>?»
         out = {"outcome": turn.outcome, "text": turn.text, "tokens": turn.tokens, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
                "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": []}
@@ -381,9 +390,20 @@ def make_handler(app):
                          "parser": d.get("parser"), "pages": (ups.get(d["doc_id"]) or {}).get("pages"),
                          "ocr_pages": (ups.get(d["doc_id"]) or {}).get("ocr_pages")} for d in app.registry]
                 pending = [{"doc_id": r["doc_id"], "display_title": r["file_name"], "department": r["department"], "stage": r["stage"],
+                            "department_name": r["department_name"] or r["department"],
                             "status": {"processing": "распознаётся…", "error": "ошибка: " + (r["error"] or "")}.get(r["status"], r["status"]),
                             "source": "загружен", "parser": r["parser"]} for r in ups.values() if r["status"] != "ready"]
                 return self._json(200, pending + docs)
+            if self.path.startswith("/api/doc?"):          # полный текст документа по пунктам — просмотр в «Документах»
+                from urllib.parse import parse_qs, urlparse
+                did = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+                d = next((x for x in app.registry if x["doc_id"] == did), None)
+                if not d:
+                    return self._json(404, {"error": "документ не найден"})
+                ws = [w for w in app.windows if w["doc_id"] == did]
+                return self._json(200, {"title": d.get("display_title"), "department_name": label(d, app.registry),
+                                        "items": [{"clause": w.get("clause") or "", "kind": w.get("kind") or "", "text": w["text"],
+                                                   "section": w.get("section_title") or "", "part": w.get("part")} for w in ws]})
             if self.path == "/api/analytics":
                 return self._json(200, app.analytics())
             if self.path == "/api/quality":
@@ -413,7 +433,8 @@ def make_handler(app):
                     fields, files = parse_multipart(self.headers.get("Content-Type", ""), self.rfile.read(n))
                     if "file" not in files:
                         return self._json(400, {"error": "нет файла"})
-                    doc_id, new = app.upload(files["file"][0], files["file"][1], fields.get("department", "TECH"), fields.get("stage", "full_cycle"))
+                    doc_id, new = app.upload(files["file"][0], files["file"][1], fields.get("department", ""), fields.get("stage", "full_cycle"),
+                                             fields.get("department_name", ""))
                     return self._json(200, {"doc_id": doc_id, "new": new})
                 except ValueError as e:
                     return self._json(400, {"error": str(e)})

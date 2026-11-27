@@ -1,6 +1,6 @@
 import unittest
 
-from app.dialog.clarify import decide, mentioned
+from app.dialog.clarify import decide, dept_followup, mentioned
 from app.search.bm25 import BM25, stem
 
 REG = [
@@ -26,6 +26,12 @@ class SearchClarifyTest(unittest.TestCase):
     def test_bm25_finds(self):
         hits = self.bm.search("кто заключает договор с субподрядчиком")
         self.assertEqual(hits[0]["window_id"], "3")
+
+    def test_dept_followup(self):
+        self.assertEqual(dept_followup("а по дбрц", REG), ["dbr"])          # опечатка в названии дирекции
+        self.assertEqual(dept_followup("А в ДБРЦТ?", REG), ["dbr"])
+        self.assertEqual(dept_followup("а по дбрцт кто подписывает договор?", REG), [])   # новый вопрос, не продолжение
+        self.assertEqual(dept_followup("заявку на расчёт", REG), [])
 
     def test_clarify_when_two_departments(self):
         hits = self.bm.search("за сколько инициировать расчёт до предложения заказчику")
