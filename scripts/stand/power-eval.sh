@@ -7,9 +7,9 @@ source "$(dirname "$0")/_python.sh"
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 pistonvlm"
 $SSH 'nohup sh -c "while true; do echo \$(date +%s.%N) \$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits | head -1); sleep 1; done" > /tmp/power-eval.log 2>&1 & echo $! > /tmp/power-eval.pid'
 sleep 20
-date +%s.%N > "$RUN_DIR/eval_start.txt"
+"$PY" -c "import time;print(time.time())" > "$RUN_DIR/eval_start.txt"
 "$PY" -I "$(dirname "$0")/../../scripts/eval/answer_eval.py" "$1" "$2" --workers=1
-date +%s.%N > "$RUN_DIR/eval_end.txt"
+"$PY" -c "import time;print(time.time())" > "$RUN_DIR/eval_end.txt"
 sleep 20
 $SSH 'kill $(cat /tmp/power-eval.pid) 2>/dev/null; cat /tmp/power-eval.log; rm -f /tmp/power-eval.log /tmp/power-eval.pid' > "$RUN_DIR/power.txt"
 "$PY" -I - "$RUN_DIR" <<'EOF'
