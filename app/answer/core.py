@@ -367,7 +367,7 @@ def abbr_note(windows):
 def answer(llm, question, windows, dept_label, terms="", thinking=False):
     kw = {"thinking": True} if thinking else {}
     user = build_user(question, windows, dept_label, terms)
-    if "G12" in set(_os.environ.get("HK_ON", "").split(",")):
+    if "G12" not in set(_os.environ.get("HK_OFF", "").split(",")):   # Г12 по умолчанию включена (выбор владельца 27.11); замер без неё — HK_OFF=G12
         user += abbr_note(windows)
     raw, meta = llm.chat_json(SYSTEM, user, SCHEMA, **kw)
     return check(raw, windows, question), meta
