@@ -38,6 +38,21 @@ def _loose(s):
     return " ".join(re.findall(r"\w+", norm(s)))
 
 
+def _elided_ok(quote, text):
+    """Цитата, сокращённая многоточием: каждый кусок (≥ 3 слов) есть в тексте пункта дословно и в том же порядке."""
+    parts = [_loose(p) for p in re.split(r"\.{3}|…", quote)]
+    parts = [p for p in parts if p]
+    if len(parts) < 2 or any(len(p.split()) < 3 for p in parts):
+        return False
+    t, pos = _loose(text), 0
+    for p in parts:
+        i = t.find(p, pos)
+        if i < 0:
+            return False
+        pos = i + len(p)
+    return True
+
+
 def build_user(question, windows, dept_label, terms=""):
     parts = []
     for i, w in enumerate(windows, 1):
@@ -244,6 +259,8 @@ def check(raw, windows, question=""):
             if st.get("quote") and norm(st["quote"]) not in norm(w["text"]) and len(_loose(st["quote"]).split()) >= 4 \
                     and _loose(st["quote"]) in _loose(w["text"]):
                 st = {**st, "quote_loose": True}     # те же слова подряд, без маркеров списка и знаков (Fable 27.11: v4_052, 099)
+            elif st.get("quote") and norm(st["quote"]) not in norm(w["text"]) and _elided_ok(st["quote"], w["text"]):
+                st = {**st, "quote_elided": True}    # цитата с «...»: каждый кусок дословно и по порядку (v4: 7 из 10 отказов)
             elif not st.get("quote") or norm(st["quote"]) not in norm(w["text"]):
                 reason = "quote_not_verbatim"
             else:

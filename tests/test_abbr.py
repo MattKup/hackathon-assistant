@@ -49,3 +49,12 @@ class LooseQuoteTest(unittest.TestCase):
         self.assertEqual(len(r["steps"]), 1)
         r = check({"verdict": "answer", "summary": "x", "steps": [{"text": "x", "ref": "w1", "quote": "SS обязан подписать договор"}]}, w)
         self.assertEqual(len(r["steps"]), 0)
+
+
+class ElidedQuoteTest(unittest.TestCase):
+    def test_elided(self):
+        from app.answer.core import _elided_ok
+        t = "Архитектор фиксирует новые сроки выдачи расчёта в заявке и уведомляет SS. Если сроки не устраивают, Архитектор закрывает заявку."
+        self.assertTrue(_elided_ok("Архитектор фиксирует новые сроки выдачи... Архитектор закрывает заявку", t))
+        self.assertFalse(_elided_ok("Архитектор закрывает заявку... Архитектор фиксирует новые сроки", t))   # порядок
+        self.assertFalse(_elided_ok("Архитектор фиксирует новые сроки... SS подписывает договор", t))
