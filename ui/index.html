@@ -413,12 +413,12 @@ async function loadSettings(){
   $("#resetDemo").onclick = async () => {
     if (!confirm("Сбросить демо-данные? Обращения, карточки знаний, журнал и диалоги будут удалены.")) return;
     $("#resetMsg").textContent = "Сбрасываю…";
-    const r = await api("/api/admin/reset-demo", {}).catch(e => ({error: String(e)}));
-    if (r.error) { $("#resetMsg").textContent = "Ошибка: " + r.error; return; }
+    // диалоги живут в браузере: стираем их сразу, даже если сервер ответит ошибкой или оборвёт ответ
     chats.length = 0; cur = null;                 // иначе страница сохранит диалоги из памяти обратно
     try { localStorage.removeItem(CHKEY); } catch (e) {}
-    $("#resetMsg").textContent = "Готово";
-    setTimeout(() => location.reload(), 600); };
+    const r = await api("/api/admin/reset-demo", {}).catch(e => ({error: String(e)}));
+    $("#resetMsg").textContent = r.error ? "Диалоги очищены, сервер: " + r.error : "Готово";
+    setTimeout(() => location.reload(), r.error ? 2500 : 600); };
 }
 $$("#nav button").forEach(b => b.onclick = () => go(b.dataset.p));
 $("#role").onchange = () => { qa = $("#role").value === "qa"; $$(".qa").forEach(x => x.classList.toggle("hide", !qa));
@@ -433,6 +433,8 @@ const CHKEY = "assistant-chats-v1";
 let chats = [], cur = null, busy = false;
 try { chats = JSON.parse(localStorage.getItem(CHKEY) || "[]"); } catch (e) { chats = []; }
 const persist = () => { try { localStorage.setItem(CHKEY, JSON.stringify(chats.slice(0, 30))); } catch (e) {} };
+// сброс в другой вкладке стенда: эта вкладка не должна записать старые диалоги обратно
+window.addEventListener("storage", e => { if ((e.key === CHKEY && e.newValue === null) || e.key === null) location.reload(); });
 function saveCur(){ if (!cur) return; cur.html = $("#msgs").innerHTML; cur.notes = notes; cur.session = session; cur.ctx = $("#ctx").textContent; persist(); }
 function openChat(c){ cur = c; session = c.session; notes = c.notes; $("#msgs").innerHTML = c.html; $("#ctx").textContent = c.ctx || "";
   bindExamples(); bind();
