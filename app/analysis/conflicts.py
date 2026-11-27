@@ -468,35 +468,6 @@ _SOFT_RULE = ("Будь строг: contradiction ставь только при
 # Этап 1 ночного режима — мягкий судья (полнота): без списка «не противоречие» (прогон 1: 5/7 ориентиров)
 SYSTEM_SOFT = SYSTEM[:SYSTEM.index("НЕ противоречие (ставь none):")] + _SOFT_RULE + SYSTEM[SYSTEM.index("\n\nsituation —"):]
 
-_VERIFY_KINDS = """Виды (поле kind):
-- contradiction — оба пункта про одну и ту же ситуацию, шаг и роль, и выполнить оба указания одновременно нельзя:
-  разные сроки одного действия; два разных ответственных за одно и то же действие; запрет в одном и разрешение
-  в другом без оговорённого исключения; несовместимый порядок шагов или статусов.
-- possible — указания выглядят несовместимыми; различие может объясняться этапом, объектом или случаем,
-  но САМ ТЕКСТ этого не оговаривает — нужно решение службы качества.
-- none — противоречия нет: оба требования выполнимы вместе; пункты про разные этапы, объекты или случаи и это
-  видно из текста; один пункт уточняет другой; общее правило и явно оговорённое исключение; разные списки
-  участников со словами «может привлекать»; «кто организует» и «кто выполняет» — разные роли."""
-
-VERIFY_STRICT = ("Ты — ревизор службы качества. Перепроверь, есть ли несовместимость между пунктами регламента A и B.\n"
-                 "Опирайся только на текст пунктов, ничего не додумывай.\n\n" + _VERIFY_KINDS + "\n\n"
-                 "Если текст сам не объясняет, почему оба указания совместимы, — possible, а не none.\n"
-                 "reason — 1–2 коротких предложения (до 300 знаков) с опорой на слова пунктов.")
-
-VERIFY_ADVOCATE = ("Ты — адвокат регламента. Твоя задача — защитить пункты A и B от обвинения в противоречии.\n"
-                   "1) defense: найди лучшее объяснение, почему они НЕ противоречат друг другу (разные этапы, объекты,\n"
-                   "   случаи; оба требования выполнимы вместе; исключение оговорено; один пункт уточняет другой).\n"
-                   "2) defense_from_text: true, если объяснение прямо следует из слов пунктов; false, если для него\n"
-                   "   приходится додумывать то, чего в тексте нет.\n"
-                   "3) kind: none — если защита держится на тексте; иначе possible или contradiction.\n\n" + _VERIFY_KINDS)
-
-VERIFY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["reason", "kind"],
-                 "properties": {"reason": {"type": "string"},
-                                "kind": {"type": "string", "enum": ["contradiction", "possible", "none"]}}}
-ADVOCATE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["defense", "defense_from_text", "kind"],
-                   "properties": {"defense": {"type": "string"}, "defense_from_text": {"type": "boolean"},
-                                  "kind": {"type": "string", "enum": ["contradiction", "possible", "none"]}}}
-
 SCHEMA = {"type": "object", "additionalProperties": False,
           "required": ["situation", "quote_a", "quote_b", "explanation", "kind"],
           "properties": {"situation": {"type": "string"}, "quote_a": {"type": "string"},
@@ -528,11 +499,12 @@ def verify_quote(q, text):
         nt, pos = norm(text), 0
         for f in frags:
             i = nt.find(norm(f), pos)
-            if i < 0 or len(re.findall(r"\w+", f)) < 2:
+            if i < 0 or not re.search(r"\w", f):
                 break
             pos = i + len(norm(f))
         else:
-            return q.strip(), False
+            if len(re.findall(r"\w+", " ".join(frags))) >= 3:
+                return q.strip(), False
     fixed = repair_quote(q, text)
     if fixed and norm(fixed) in norm(text):
         return fixed, True
@@ -552,23 +524,67 @@ def judge_pair(llm, wa, wb, p, max_tokens=900, system=None):
     return raw, meta
 
 
-def _verify_user(wa, wb, rel):
-    return (f"Отношение пунктов: {REL_RU[rel]}.\n\nПункт A — {_head(wa)}\n{wa['text']}\n\n"
-            f"Пункт B — {_head(wb)}\n{wb['text']}\n\nПерепроверь пункты A и B и верни JSON.")
+CHECK_SYSTEM = """Ты — ревизор службы качества. Проверь гипотезу о несостыковке двух пунктов регламента (A и B).
+Опирайся только на текст пунктов; соседние пункты (если даны) — лишь контекст для понимания.
+Сначала коротко рассуди (reason), затем ответь на вопросы:
+- same_action: оба пункта задают правило для ОДНОГО И ТОГО ЖЕ действия (одна роль или один объект), а не для разных шагов?
+  yes / no / unclear
+- same_case: правила относятся к одному этапу и случаю — или текст НЕ разделяет этапы/случаи?
+  yes — один случай или текст их не разделяет; no — текст явно называет разные этапы, объекты или условия
+- both_possible: можно ли в этой ситуации выполнить оба указания одновременно? yes / no / unclear
+- explicit_exception: один пункт прямо оговорён как исключение из другого (словами «исключение», «кроме»,
+  ссылкой на тот пункт или его условие)? yes / no
+Два условия для одного действия выполнимы вместе (both_possible=yes). Разные списки «может привлекать» — тоже.
+«Кто организует» и «кто выполняет» — разные действия (same_action=no)."""
+
+_YNU = {"type": "string", "enum": ["yes", "no", "unclear"]}
+CHECK_SCHEMA = {"type": "object", "additionalProperties": False,
+                "required": ["reason", "same_action", "same_case", "both_possible", "explicit_exception"],
+                "properties": {"reason": {"type": "string"}, "same_action": _YNU, "same_case": _YNU,
+                               "both_possible": _YNU, "explicit_exception": {"type": "string", "enum": ["yes", "no"]}}}
 
 
-VOTERS = (("strict_ab", VERIFY_STRICT, VERIFY_SCHEMA, False),
-          ("strict_ba", VERIFY_STRICT, VERIFY_SCHEMA, True),       # порядок B↔A: модель склонна к первому пункту
-          ("advocate", VERIFY_ADVOCATE, ADVOCATE_SCHEMA, False))
+def check_kind(r):
+    """Вид по ответам чек-листа (решает код, не модель)."""
+    if r.get("same_action") == "no" or r.get("same_case") == "no" or r.get("both_possible") == "yes" \
+            or r.get("explicit_exception") == "yes":
+        return "none"
+    if r.get("same_action") == "yes" and r.get("same_case") == "yes" and r.get("both_possible") == "no":
+        return "contradiction"
+    return "possible"
 
 
-def vote(llm, wa, wb, rel, voter, max_tokens=700):
-    name, system, schema, swap = voter
-    user = _verify_user(wb, wa, rel) if swap else _verify_user(wa, wb, rel)
-    raw, meta = llm.chat_json(system, user, schema, max_tokens=max_tokens)
-    kind = raw.get("kind") if raw.get("kind") in ("contradiction", "possible", "none") else "none"
-    return {"voter": name, "kind": kind, "reason": (raw.get("reason") or raw.get("defense") or "").strip(),
-            "defense_from_text": raw.get("defense_from_text")}, meta
+def _neighbors(windows, i, n=600):
+    out = []
+    for j in (i - 1, i + 1):
+        if 0 <= j < len(windows) and windows[j]["doc_id"] == windows[i]["doc_id"]:
+            out.append(f"п. {windows[j]['clause']}: {windows[j]['text'][:n]}")
+    return out
+
+
+def _verify_user(wa, wb, rel, situation="", ctx_a=(), ctx_b=()):
+    ctx = ""
+    if ctx_a or ctx_b:
+        ctx = ("\n\nКонтекст — соседние пункты (только для понимания):\n"
+               + "\n".join([f"рядом с A — {c}" for c in ctx_a] + [f"рядом с B — {c}" for c in ctx_b]))
+    hyp = f"Гипотеза: несостыковка в ситуации «{situation}».\n" if situation else ""
+    return (f"{hyp}Отношение пунктов: {REL_RU[rel]}.\n\nПункт A — {_head(wa)}\n{wa['text']}\n\n"
+            f"Пункт B — {_head(wb)}\n{wb['text']}{ctx}\n\nПерепроверь пункты A и B и верни JSON.")
+
+
+VOTERS = (("check_ab", False, False),
+          ("check_ba", True, False),            # порядок B↔A: модель склонна к первому пункту
+          ("check_ctx", False, True))           # с соседними пунктами: условие часто стоит в соседнем пункте
+
+
+def vote(llm, windows, ia, ib, rel, voter, situation="", max_tokens=700):
+    name, swap, ctx = voter
+    wa, wb = windows[ia], windows[ib]
+    ca, cb = (_neighbors(windows, ia), _neighbors(windows, ib)) if ctx else ((), ())
+    user = _verify_user(wb, wa, rel, situation, cb, ca) if swap else _verify_user(wa, wb, rel, situation, ca, cb)
+    raw, meta = llm.chat_json(CHECK_SYSTEM, user, CHECK_SCHEMA, max_tokens=max_tokens)
+    return {"voter": name, "kind": check_kind(raw), "reason": (raw.get("reason") or "").strip(),
+            "answers": {k: raw.get(k) for k in ("same_action", "same_case", "both_possible", "explicit_exception")}}, meta
 
 
 def decide(votes):
@@ -712,26 +728,32 @@ def analyze(windows, docs, llm, budget=300, k=8, k_cross=3, cross_share=0.2, vec
     t1 = time.time()
     system1 = SYSTEM_SOFT if night else SYSTEM
 
-    def one(p):
+    def one(job):
+        p, swap = job
         wa, wb = windows[p["a"]], windows[p["b"]]
         try:
             if llm is None:
                 return p, offline_judge(wa, wb, p), {}, None
-            raw, meta = judge_pair(llm, wa, wb, p, system=system1)
+            if swap:                                  # второй проход ночью: порядок B, A — потом цитаты обратно
+                raw, meta = judge_pair(llm, wb, wa, p, system=system1)
+                raw = {**raw, "quote_a": raw.get("quote_b", ""), "quote_b": raw.get("quote_a", ""), "pass": "ba"}
+            else:
+                raw, meta = judge_pair(llm, wa, wb, p, system=system1)
             return p, raw, meta, None
         except Exception as ex:                       # сбой одной пары не останавливает прогон
             return p, None, {}, str(ex)[:200]
 
-    for n, (p, raw, meta, err) in enumerate(_pmap(one, chosen, workers), 1):
+    jobs1 = [(p, False) for p in chosen] + ([(p, True) for p in chosen] if night and llm is not None else [])
+    for n, (p, raw, meta, err) in enumerate(_pmap(one, jobs1, workers), 1):
         tok["prompt"] += meta.get("prompt_tokens") or 0
         tok["completion"] += meta.get("completion_tokens") or 0
         wa, wb = windows[p["a"]], windows[p["b"]]
         if err:
             errors.append({"stage": 1, "a": _ref(wa), "b": _ref(wb), "error": err})
             continue
-        judged.append({"order": p["order"], "a": _ref(wa), "b": _ref(wb), "relation": p["relation"],
-                       "score": p["score"], "signals": p["signals"], "llm_kind": raw.get("kind"),
-                       "explanation": raw.get("explanation", "")})
+        judged.append({"order": p["order"], "pass": raw.get("pass", "ab"), "a": _ref(wa), "b": _ref(wb),
+                       "relation": p["relation"], "score": p["score"], "signals": p["signals"],
+                       "llm_kind": raw.get("kind"), "explanation": raw.get("explanation", "")})
         f, r = postprocess(raw, wa, wb, p)
         if f:
             f["_ab"] = (p["a"], p["b"])
@@ -739,8 +761,17 @@ def analyze(windows, docs, llm, budget=300, k=8, k_cross=3, cross_share=0.2, vec
         if r:
             rejected.append(r)
         if n % 50 == 0:
-            log(f"  этап 1: {n}/{len(chosen)} находок={len(findings)} отброшено={len(rejected)} ошибок={len(errors)}")
+            log(f"  этап 1: {n}/{len(jobs1)} находок={len(findings)} отброшено={len(rejected)} ошибок={len(errors)}")
     t_llm = time.time() - t1
+    # два прохода этапа 1 → одна находка на пару: сильнейший вид, оба вердикта в stage1_votes
+    rank = {"contradiction": 0, "possible": 1, "dependency": 2, "dept_difference": 3}
+    best = {}
+    for f in findings:
+        key = f["_ab"]
+        if key not in best or rank[f["kind"]] < rank[best[key]["kind"]]:
+            best[key] = {**f, "stage1_votes": best.get(key, {}).get("stage1_votes", [])}
+        best[key]["stage1_votes"] = best[key].get("stage1_votes", []) + [f["llm_kind"]]
+    findings = list(best.values())
 
     # этап 2: перепроверка (только ночью и только с LLM)
     review_rejected, tok2, t2 = [], Counter(), time.time()
@@ -749,9 +780,8 @@ def analyze(windows, docs, llm, budget=300, k=8, k_cross=3, cross_share=0.2, vec
 
     def vjob(fv):
         f, v = fv
-        wa, wb = windows[f["_ab"][0]], windows[f["_ab"][1]]
         try:
-            res, meta = vote(llm, wa, wb, f["relation"], v)
+            res, meta = vote(llm, windows, f["_ab"][0], f["_ab"][1], f["relation"], v, f.get("situation", ""))
             return f, res, meta, None
         except Exception as ex:
             return f, None, {}, str(ex)[:200]
@@ -855,7 +885,7 @@ def _loc(r):
     return f"{r['department']} · {r['doc_title']} · п. {r['clause']}"
 
 
-VOTER_RU = {"strict_ab": "ревизор (A→B)", "strict_ba": "ревизор (B→A)", "advocate": "адвокат"}
+VOTER_RU = {"check_ab": "ревизор (A→B)", "check_ba": "ревизор (B→A)", "check_ctx": "ревизор с соседними пунктами"}
 KIND_SHORT = {"contradiction": "противоречие", "possible": "возможное", "none": "нет", "dependency": "зависимость",
               "dept_difference": "различие дирекций"}
 
@@ -898,7 +928,7 @@ def render_md(report):
     rr = report.get("review_rejected") or []
     if rr:
         L += [f"## Отклонено перепроверкой ({len(rr)}) — для разбора", "",
-              "Этап 1 (мягкий судья) счёл несостыковкой, большинство из трёх перепроверок — нет.", ""]
+              "Этап 1 (мягкий судья) счёл несостыковкой, большинство из трёх перепроверок (чек-лист, решает код) — нет.", ""]
         for f in rr:
             L += [f"**{f['id']}. {_loc(f['a'])} ↔ п. {f['b']['clause']}** — этап 1: {KIND_SHORT.get(f.get('stage1_kind', f['kind']), f['kind'])}",
                   f"- «{f['a']['quote']}» ↔ «{f['b']['quote']}»", f"- Этап 1: {f['explanation']}"]

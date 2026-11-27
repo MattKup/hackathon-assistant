@@ -39,6 +39,10 @@ def parts(user):
     return m.group(1), m.group(2)
 
 
+YES = {"reason": "сроки разные", "same_action": "yes", "same_case": "yes", "both_possible": "no", "explicit_exception": "no"}
+NO = {"reason": "совместимы", "same_action": "yes", "same_case": "yes", "both_possible": "yes", "explicit_exception": "no"}
+
+
 class Stub:
     """Заглушка LLM: решение — функция от текстов A и B."""
 
@@ -48,12 +52,12 @@ class Stub:
     def chat_json(self, system, user, schema, max_tokens=600):
         self.calls += 1
         a, b = parts(user)
-        if system in (C.VERIFY_STRICT, C.VERIFY_ADVOCATE):
+        if system == C.CHECK_SYSTEM:
             self.verify_calls = getattr(self, "verify_calls", 0) + 1
             return self.verifier(a, b, system), {"prompt_tokens": 50, "completion_tokens": 10}
         return self.fn(a, b), {"prompt_tokens": 100, "completion_tokens": 20}
 
-    verifier = staticmethod(lambda a, b, system: {"reason": "", "kind": "none"})
+    verifier = staticmethod(lambda a, b, system: NO)
 
 
 def first_sentence(t):
@@ -172,8 +176,7 @@ class NightModeTest(unittest.TestCase):
                      win("tech", "6.2", "После подписания договора РП создаёт Смету в учётной системе в течение 7 рабочих дней.")])
         llm = Stub(deadline_judge)
         # перепроверка подтверждает только пару 5.2 ↔ 9.4; адвокат её не защитил
-        llm.verifier = lambda a, b, system: {"reason": "сроки разные", "kind": "contradiction", "defense": "", "defense_from_text": False} \
-            if {"3 рабочих", "5 рабочих"} <= {x for x in ("3 рабочих", "5 рабочих") if x in a + b} else {"reason": "совместимы", "kind": "none", "defense": "совместимы", "defense_from_text": True}
+        llm.verifier = lambda a, b, system: YES if ("3 рабочих" in a + b and "5 рабочих" in a + b) else NO
         rep = C.analyze(ws, DOCS, llm, budget=1, workers=1, log=lambda *_: None, night=True)
         m = rep["metrics"]
         self.assertTrue(m["night"])
@@ -187,6 +190,12 @@ class NightModeTest(unittest.TestCase):
         self.assertTrue(all(f["id"].startswith("R") for f in rep["review_rejected"]))
         md = C.render_md(rep)
         self.assertIn("Отклонено перепроверкой", md)
+
+    def test_check_kind_rules(self):
+        self.assertEqual(C.check_kind(YES), "contradiction")
+        self.assertEqual(C.check_kind(NO), "none")
+        self.assertEqual(C.check_kind({**YES, "same_case": "unclear"}), "possible")
+        self.assertEqual(C.check_kind({**YES, "explicit_exception": "yes"}), "none")
 
     def test_decide_majority(self):
         V = lambda *ks: [{"kind": k} for k in ks]  # noqa: E731
