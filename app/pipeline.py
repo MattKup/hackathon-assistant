@@ -113,6 +113,9 @@ ASK_DONT_KNOW = "Не знаю"
 ASK_SEND = "Отправить вопрос в службу качества"
 NOT_COVERED = "Ваш случай в регламенте прямо не оговорён — я отправил вопрос в службу качества, вы в копии. Ниже — правило, которое есть."
 
+PRACTICE_CONFLICT = ("Разъяснение службы качества расходится с действующим пунктом регламента. Пока регламент действует, "
+                     "поступать вопреки ему нельзя — ниже правило регламента; если вопрос срочный, решение согласуйте "
+                     "индивидуально с руководителем, у которого есть на это полномочия. Я сообщил о расхождении в службу качества, вы в копии.")
 CONFLICT = ("Пункты регламента здесь противоречат друг другу — однозначного ответа нет. Пока регламент действует, поступать "
             "вопреки ему нельзя; если вопрос срочный, решение согласуйте индивидуально с руководителем, у которого есть на это "
             "полномочия. Я сообщил о противоречии в службу качества, вы в копии. Ниже — оба пункта.")   # практика заказчика 27.11
@@ -155,8 +158,8 @@ def apply_conflicts(results, conflicts, tr, question=""):
     out = []
     for r in results:
         res = r["result"]
-        if res["verdict"] == "no_answer" or any((st.get("doc_title") or "").startswith("Практика") for st in res.get("steps", [])):
-            out.append(r)            # ответ по практике СК: у неё приоритет над регламентом (организаторы 26.11) — пара уже разрешена
+        if res["verdict"] == "no_answer":
+            out.append(r)            # заказчик 27.11: регламент главнее карточки СК — подтверждённое противоречие пунктов не «гасится» практикой
             continue
         hits = []
         for st in res.get("steps", []):
@@ -607,10 +610,13 @@ def _final(results, note, tr, hits, session, question, complex_=False):
         tr.append("Модель отметила противоречие, но не опёрла его на два пункта — показываю как ответ с оговоркой")
     if t.outcome == "conflict":
         tr.append("Пункты регламента противоречат друг другу — отправляю вопрос в службу качества")
-        t.text = CONFLICT + (" " + note if note else "")
         pairs = sorted({c["pair"] for r in results for c in r["result"].get("conflict_with", []) if c.get("pair")})
+        with_practice = not pairs and any((st.get("doc_title") or "").startswith("Практика")
+                                          for r in results if r["result"]["verdict"] == "conflict" for st in r["result"].get("steps", []))
+        t.text = (PRACTICE_CONFLICT if with_practice else CONFLICT) + (" " + note if note else "")
         t.route = {"to": "служба качества", "email": True,
-                   "why": "противоречие между пунктами регламента" + (": " + ", ".join(pairs) if pairs else "")}
+                   "why": ("противоречие: разъяснение службы качества расходится с пунктом регламента — изменить регламент или отозвать карточку"
+                           if with_practice else "противоречие между пунктами регламента" + (": " + ", ".join(pairs) if pairs else ""))}
     elif not_covered(results, complex_):
         tr.append("Правило есть, но случай сотрудника в нём не оговорён — отправляю вопрос в службу качества")
         t.text = (NOT_COVERED + (" " + note if note else ""))

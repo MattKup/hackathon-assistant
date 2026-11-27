@@ -447,14 +447,15 @@ class ConflictRegistryTest(unittest.TestCase):
 
 
 class PracticePriorityTest(unittest.TestCase):
-    """Организаторы 26.11: при расхождении ответа СК и регламента приоритет у службы качества — пара противоречия
-    не срабатывает, если ответ опирается на практику СК."""
-    def test_practice_answer_not_flagged_conflict(self):
+    """Заказчик 27.11: регламент главнее карточки СК — подтверждённое противоречие пунктов срабатывает,
+    даже если в ответе есть практика СК."""
+    def test_regulation_conflict_not_hidden_by_practice(self):
         from app.pipeline import apply_conflicts
         conf = {("dbr", "1.5"): [{"clause": "1.6", "why": "разные сроки", "text": "т", "pair": "DBRCT:1.5↔1.6"}]}
-        res = {"verdict": "answer", "steps": [{"doc_id": "dbr", "clause": "1.5", "doc_title": "Практика службы качества"}]}
-        out = apply_conflicts([{"label": "ДБРЦТ", "result": res}], conf, [], "за сколько подавать заявку сроки")
-        self.assertEqual(out[0]["result"]["verdict"], "answer")
+        res = {"verdict": "answer", "steps": [{"doc_id": "dbr", "clause": "1.5", "doc_title": "Регламент ДБРЦТ"},
+                                              {"doc_id": "", "clause": "P1", "doc_title": "Практика службы качества"}]}
+        out = apply_conflicts([{"label": "ДБРЦТ", "result": res}], conf, [], "за сколько подавать заявку сроки разные")
+        self.assertEqual(out[0]["result"]["verdict"], "conflict")
         res2 = {"verdict": "answer", "steps": [{"doc_id": "dbr", "clause": "1.5", "doc_title": "Регламент ДБРЦТ"}]}
         out = apply_conflicts([{"label": "ДБРЦТ", "result": res2}], conf, [], "за сколько подавать заявку сроки разные")
         self.assertEqual(out[0]["result"]["verdict"], "conflict")
