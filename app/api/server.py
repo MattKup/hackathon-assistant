@@ -265,6 +265,10 @@ class App:
             s["pending"] = None
         s["last"] = {"q": q, "hits": turn.hits[:5], "employee": employee,
                      "depts": [a["label"] for a in turn.answers if a["result"]["verdict"] != "no_answer"]}
+        for a in turn.answers:                           # расхождение карточки СК с пунктом — в отчёт СК, не в ответ сотруднику
+            if a["result"].get("discrepancy"):
+                pids = sorted({w.get("window_id") for w in a.get("windows") or [] if w.get("kind") == "practice"})
+                self.store.add_discrepancy(q, a["label"], a["result"]["discrepancy"], pids)
         if turn.outcome == "escalate" or (turn.route or {}).get("email"):
             why = (turn.route or {}).get("why") or "в регламентах нет опоры для ответа"
             out["case"] = self.escalate(sid, why)
@@ -389,6 +393,8 @@ def make_handler(app):
                 return self._json(200, app.conflict_reg.pairs(st if st in ("candidate", "confirmed", "rejected") else None, app.windows))
             if self.path == "/api/cases":
                 return self._json(200, app.store.cases())
+            if self.path == "/api/discrepancies":
+                return self._json(200, app.store.discrepancies())
             if self.path == "/api/practices":
                 return self._json(200, app.store.practices(only_published=False))
             return self._json(404, {"error": "not found"})

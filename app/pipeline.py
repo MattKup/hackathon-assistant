@@ -113,9 +113,6 @@ ASK_DONT_KNOW = "Не знаю"
 ASK_SEND = "Отправить вопрос в службу качества"
 NOT_COVERED = "Ваш случай в регламенте прямо не оговорён — я отправил вопрос в службу качества, вы в копии. Ниже — правило, которое есть."
 
-PRACTICE_CONFLICT = ("Разъяснение службы качества расходится с действующим пунктом регламента. Пока регламент действует, "
-                     "поступать вопреки ему нельзя — ниже правило регламента; если вопрос срочный, решение согласуйте "
-                     "индивидуально с руководителем, у которого есть на это полномочия. Я сообщил о расхождении в службу качества, вы в копии.")
 CONFLICT = ("Пункты регламента здесь противоречат друг другу — однозначного ответа нет. Пока регламент действует, поступать "
             "вопреки ему нельзя; если вопрос срочный, решение согласуйте индивидуально с руководителем, у которого есть на это "
             "полномочия. Я сообщил о противоречии в службу качества, вы в копии. Ниже — оба пункта.")   # практика заказчика 27.11
@@ -333,6 +330,15 @@ def related_clauses(question, res, ws, index, limit=2):
         if len(out) >= limit:
             break
     return out
+
+
+def split_discrepancy(res):
+    """Метка модели «РАСХОЖДЕНИЕ: …» в missing → поле discrepancy (в отчёт СК), сотруднику не показывается:
+    ответ однозначный, по регламенту (владелец 27.11)."""
+    m = (res.get("missing") or "").strip()
+    if not m.upper().startswith("РАСХОЖДЕНИЕ"):
+        return res
+    return {**res, "missing": "", "discrepancy": m.split(":", 1)[-1].strip()[:200]}
 
 
 def needs_deep(res, support):
@@ -611,12 +617,9 @@ def _final(results, note, tr, hits, session, question, complex_=False):
     if t.outcome == "conflict":
         tr.append("Пункты регламента противоречат друг другу — отправляю вопрос в службу качества")
         pairs = sorted({c["pair"] for r in results for c in r["result"].get("conflict_with", []) if c.get("pair")})
-        with_practice = not pairs and any((st.get("doc_title") or "").startswith("Практика")
-                                          for r in results if r["result"]["verdict"] == "conflict" for st in r["result"].get("steps", []))
-        t.text = (PRACTICE_CONFLICT if with_practice else CONFLICT) + (" " + note if note else "")
+        t.text = CONFLICT + (" " + note if note else "")
         t.route = {"to": "служба качества", "email": True,
-                   "why": ("противоречие: разъяснение службы качества расходится с пунктом регламента — изменить регламент или отозвать карточку"
-                           if with_practice else "противоречие между пунктами регламента" + (": " + ", ".join(pairs) if pairs else ""))}
+                   "why": "противоречие между пунктами регламента" + (": " + ", ".join(pairs) if pairs else "")}
     elif not_covered(results, complex_):
         tr.append("Правило есть, но случай сотрудника в нём не оговорён — отправляю вопрос в службу качества")
         t.text = (NOT_COVERED + (" " + note if note else ""))
@@ -896,6 +899,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                     meta.update({k: v for k, v in d["meta"].items() if k in ("prompt_tokens", "completion_tokens")})
         meta["clauses_seen"] = [w["clause"] for w in ws]
         meta["context_chars"] = sum(len(w["text"]) for w in ws)
+        res = split_discrepancy(res)
         if session.get("hints") or "G15" in ON:   # Г15 — опция (владелец 27.11): по умолчанию выключена, включается в чате или HK_ON=G15
             rel = related_clauses(question, res, ws, index)
             if rel:

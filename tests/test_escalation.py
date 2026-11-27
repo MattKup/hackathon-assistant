@@ -84,3 +84,18 @@ class DestinationTest(unittest.TestCase):
         self.assertEqual((p["status"], p["destination"]), ("published", "regulation"))
         with self.assertRaises(ValueError):
             s.set_destination(pid, "x")
+
+
+class DiscrepancyTest(unittest.TestCase):
+    def test_marker_moves_to_report_field(self):
+        from app.pipeline import split_discrepancy
+        r = split_discrepancy({"verdict": "answer", "missing": "РАСХОЖДЕНИЕ: разъяснение службы качества расходится с п. 8.4"})
+        self.assertEqual(r["missing"], "")
+        self.assertIn("п. 8.4", r["discrepancy"])
+        self.assertNotIn("discrepancy", split_discrepancy({"verdict": "answer", "missing": "нет срока"}))
+
+    def test_store_report(self):
+        from app.escalation.store import Store
+        s = Store(":memory:")
+        s.add_discrepancy("q", "ДБРЦТ", "расходится с п. 8.4", ["P1"])
+        self.assertEqual(s.discrepancies()[0]["practice_ids"], ["P1"])

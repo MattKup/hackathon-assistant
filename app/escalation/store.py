@@ -18,6 +18,8 @@ create table if not exists mails(
 create table if not exists practices(
   practice_id text primary key, case_id text, created real, expert text, question text, answer text,
   applies_to text, clauses text, outcome text, status text, revoked_by text, revoked_at real);
+create table if not exists discrepancies(
+  created real, question text, department text, note text, practice_ids text);
 create table if not exists drafts(
   case_id text primary key, created real, draft text, mail_sent integer default 0);
 """
@@ -85,6 +87,16 @@ class Store:
             raise ValueError("destination: faq | regulation")
         self.db.execute("update practices set destination=? where practice_id=?", (destination, pid))
         self.db.commit()
+
+    def add_discrepancy(self, question, department, note, practice_ids):
+        """Отчёт СК: разъяснение СК расходится с пунктом регламента — ответ сотруднику был по регламенту."""
+        self.db.execute("insert into discrepancies values(?,?,?,?,?)",
+                        (time.time(), question, department, note, json.dumps(practice_ids, ensure_ascii=False)))
+        self.db.commit()
+
+    def discrepancies(self):
+        return [{**dict(r), "practice_ids": json.loads(r["practice_ids"] or "[]")}
+                for r in self.db.execute("select * from discrepancies order by created desc")]
 
     def approve(self, pid, who, question=None, answer=None, applies_to=None, destination=None):
         row = self.db.execute("select * from practices where practice_id=?", (pid,)).fetchone()

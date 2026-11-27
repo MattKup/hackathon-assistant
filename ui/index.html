@@ -462,9 +462,11 @@ async function loadKnow(){
   const reg = p.filter(x => x.status === "published" && x.destination === "regulation");
   const cfr = await api("/api/conflicts?status=confirmed").catch(() => []);
   const cfl = Array.isArray(cfr) ? cfr : (cfr.pairs || []);
-  $("#regCount").textContent = `${reg.length} из ответов службы качества · ${cfl.length} противоречий`;
-  $("#regList").innerHTML = (reg.length || cfl.length)
+  const dsc = await api("/api/discrepancies").catch(() => []);
+  $("#regCount").textContent = `${reg.length} из ответов службы качества · ${cfl.length} противоречий · ${dsc.length} расхождений разъяснений`;
+  $("#regList").innerHTML = (reg.length || cfl.length || dsc.length)
     ? reg.map(x => `<div class="mailcard"><b>Дополнить регламент ответом службы качества</b> <span class="meta">карточка ${esc(x.practice_id)} · ${x.applies_to.map(d => DEP[d] || d).join(", ")}</span><pre>${esc(x.question)}</pre><div class="note">${esc(x.answer)}</div></div>`).join("")
+      + dsc.map(d => `<div class="mailcard"><b>Разъяснение службы качества расходится с регламентом</b> <span class="meta">${esc(d.department)} · ${new Date(d.created*1000).toLocaleString("ru")}</span><pre>${esc(d.question)}</pre><div class="note">${esc(d.note)} — сотруднику дан ответ по регламенту; изменить регламент или отозвать карточку</div></div>`).join("")
       + cfl.map(c => `<div class="mailcard"><b>Устранить противоречие</b> <span class="meta">${esc(DEP[c.department] || c.department || "")} · п. ${esc(c.clause_a)} ↔ п. ${esc(c.clause_b)}</span><div class="note">${esc(c.explanation || "")}</div></div>`).join("")
     : `<div class="empty">Пока нет — сюда попадают ответы службы качества с пометкой «предложить в регламент» и подтверждённые противоречия</div>`;
   $$("[data-rv]").forEach(b => b.onclick = async () => { await api("/api/qa/revoke", {practice_id:b.dataset.rv}); loadKnow(); });
