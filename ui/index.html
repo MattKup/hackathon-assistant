@@ -337,6 +337,8 @@ function render(r){
         const who = [s.who, s.deadline].filter(Boolean).join(", ");
         return `<li>${esc(s.text)}${who ? ` <span class="who">— ${esc(who)}</span>` : ""}<sup class="fn" data-n="${n}">${n}</sup></li>`; }).join("") + `</ol>`;
       if (a.caveat) h += `<div class="caveat">⚠︎ <span>${esc(a.caveat)}</span></div>`;
+      if (a.related?.length) h += `<div class="caveat">☞ <span><b>Ответ может быть неполным — проверьте также:</b>` + a.related.map(x => `<br>п. ${esc(x.clause)}${x.doc_title ? ` «${esc(x.doc_title)}»` : ""} (${esc(x.why)}): <i>${esc(x.quote)}…</i>`).join("") + `</span></div>`;
+      if (a.missing && ["answer","answer_with_caveat"].includes(a.verdict)) h += `<p class="meta">В найденных пунктах нет: ${esc(a.missing)}</p>`;
       if (a.conflict_with?.length) h += a.conflict_with.map(c => `<div class="caveat">⚖︎ <span><b>Противоречие с п. ${esc(c.clause)}:</b> ${esc(c.why)}${c.text ? `<br><i>${esc(c.text)}</i>` : ""}</span></div>`).join("");
       if (a.deep) h += `<p class="meta">🔎 Ответ уточнён: ассистент добрал пункты по ссылкам и соседние</p>`;
       h += `</div>`;
