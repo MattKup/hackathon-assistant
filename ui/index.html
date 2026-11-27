@@ -344,7 +344,7 @@ function render(r){
       h += `</div>`;
     }
     if (r.text) h += `<p class="meta">${esc(r.text)}</p>`;
-    if (r.outcome === "conflict") h += `<div class="caveat">⚠︎ <span>В регламентах противоречие — ответ требует подтверждения службы качества.</span></div>`;
+    if (r.outcome === "conflict") h += `<div class="caveat">⚠︎ <span>В регламентах противоречие. Пока регламент действует, поступать вопреки ему нельзя; срочное решение — индивидуальное согласование с руководителем, у которого есть полномочия. Служба качества уведомлена.</span></div>`;
     if (r.external_refs?.length) h += `<div class="note">Подробный порядок описан в документе, которого нет в базе помощника: ${r.external_refs.map(esc).join("; ")}</div>`;
     const uniq = {}; used.forEach(n => { const s = notes[n-1]; const k = s.practice ? "practice" : s.doc_title + "|" + s.clause; (uniq[k] ||= {s, ns:[]}).ns.push(n); });
     if (used.length) h += `<div class="lbl">Подтверждено источниками</div><div class="srcs">` + Object.values(uniq).map(({s, ns}) =>
