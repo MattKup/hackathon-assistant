@@ -17,6 +17,7 @@ from pathlib import Path
 from app.analysis.registry import ConflictRegistry
 from app.answer.cache import AnswerCache
 from app.dialog.clarify import dept_followup, label
+from app.answer.aspects import EXTERNAL, EXTERNAL_NAME, SHOW_FOR, external_hits, is_external, match_rules, parse_rules, rules_to_lines
 from app.escalation import draft as qa_draft
 from app.escalation import mail
 from app.escalation import repeats
@@ -139,8 +140,18 @@ class App:
             self.conflicts = None                 # перечитать реестр противоречий с новым текстом пунктов
 
     # --- загрузка документов (служба качества) ---
-    def upload(self, file_name, data, department, stage, department_name=""):
+    def search_ext(self, q, allowed, k=2):
+        """Поиск только по внешним источникам (минуя фильтр основного поиска)."""
+        if self.mock:
+            hits = self.bm.search(q, k=k, allowed=allowed)
+            top = hits[0]["score"] if hits else 1
+            return [{**h, "score": round(min(0.99, h["score"] / top), 3)} for h in hits]
+        return self.hy.search(q, k=k, allowed=allowed)[0]
+
+    def upload(self, file_name, data, department, stage, department_name="", doc_kind=""):
         import re as _re
+        if doc_kind == "external":                   # внешний источник: только для «Обратите внимание», не регламент
+            department, department_name, stage = EXTERNAL, EXTERNAL_NAME, "full_cycle"
         department_name = " ".join((department_name or "").split())[:80]
         if department_name and not department:      # новое подразделение: код — из названия, название — как ввели
             department = department_name
@@ -211,7 +222,11 @@ class App:
                 "repeats": {"groups": self.repeats.groups()[:10], **{k: self.repeats.conf[k] for k in ("period_days", "threshold")}}}
 
     def search(self, q, allowed, k=16):
-        """Практика ищется вместе с документом подразделения: allowed расширяется practice:<dep>."""
+        """Практика ищется вместе с документом подразделения: allowed расширяется practice:<dep>.
+        Внешние источники («Обратите внимание») в основной поиск не попадают."""
+        ext = {d["doc_id"] for d in self.registry if is_external(d)}
+        if ext and not allowed:
+            allowed = {d["doc_id"] for d in self.registry if not is_external(d)}
         if allowed:
             deps = {d["department"] for d in self.registry if d["doc_id"] in allowed}
             allowed = set(allowed) | {f"practice:{d}" for d in deps}
@@ -262,12 +277,22 @@ class App:
             self.index = build_index(self.windows)                  # пункты по номеру — для агентного прохода
         if getattr(self, "_abbr_n", None) != len(self.windows):   # сокращения документов — пересчёт при изменении базы
             self.abbr, self._abbr_n = doc_abbr(self.windows, self.registry), len(self.windows)
-        turn = run_turn(q, self.registry, self.search, self.llm, session=s, answer_cache=self.answer_cache,
+        turn = run_turn(q, [d for d in self.registry if not is_external(d)], self.search, self.llm, session=s, answer_cache=self.answer_cache,
                         conflicts=self.conflicts, index=self.index, abbr=self.abbr)   # s хранит кэш ответов по дирекциям для второго хода
         s["last_q"] = turn.question or q             # для продолжений «а по <дирекция>?»
+        aspects = []
+        if turn.outcome in SHOW_FOR:                 # «Обратите внимание — не из регламента» (организаторы 27.11, вариант А)
+            from app.config import cfg as _cfg
+            aspects = match_rules(turn.question or q, _cfg().get("aspects") or [])
+            ext = [d["doc_id"] for d in self.registry if is_external(d)]
+            if ext:
+                try:
+                    aspects += external_hits(lambda qq, al, k: self.search_ext(qq, al, k), turn.question or q, ext)
+                except Exception:
+                    pass
         out = {"outcome": turn.outcome, "text": turn.text, "tokens": turn.tokens, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
-               "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": []}
+               "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": [], "aspects": aspects}
         for a in turn.answers:
             r = a["result"]
             out["answers"].append({"label": a["label"], "verdict": r["verdict"], "summary": r["summary"], "caveat": r.get("caveat", ""),
@@ -428,7 +453,9 @@ def make_handler(app):
                 return self._json(200, app.store.discrepancies())
             if self.path == "/api/settings":
                 from app import config as _config
-                return self._json(200, {k: _config.cfg().get(k) for k in _config.EDITABLE})
+                st = {k: _config.cfg().get(k) for k in _config.EDITABLE}
+                st["aspects"] = rules_to_lines(st.get("aspects") or [])
+                return self._json(200, st)
             if self.path == "/api/practices":
                 return self._json(200, app.store.practices(only_published=False))
             return self._json(404, {"error": "not found"})
@@ -443,7 +470,7 @@ def make_handler(app):
                     if "file" not in files:
                         return self._json(400, {"error": "нет файла"})
                     doc_id, new = app.upload(files["file"][0], files["file"][1], fields.get("department", ""), fields.get("stage", "full_cycle"),
-                                             fields.get("department_name", ""))
+                                             fields.get("department_name", ""), fields.get("doc_kind", ""))
                     return self._json(200, {"doc_id": doc_id, "new": new})
                 except ValueError as e:
                     return self._json(400, {"error": str(e)})
@@ -505,6 +532,8 @@ def make_handler(app):
                     ch = {}
                     if isinstance(b.get("qa_topics"), list):
                         ch["qa_topics"] = [str(t).strip()[:80] for t in b["qa_topics"] if str(t).strip()][:30]
+                    if isinstance(b.get("aspects"), list):
+                        ch["aspects"] = parse_rules(b["aspects"])
                     rm = b.get("repeat_monitor")
                     if isinstance(rm, dict):
                         try:

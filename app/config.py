@@ -24,7 +24,7 @@ def cfg():
     return _CFG
 
 
-EDITABLE = ("qa_topics", "repeat_monitor")
+EDITABLE = ("qa_topics", "repeat_monitor", "aspects")
 
 
 def use_overrides(path):
