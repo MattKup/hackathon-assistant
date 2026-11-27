@@ -237,14 +237,16 @@ def added_from_question(step_text, window_text, question):
 
 
 PERMIT = re.compile(r"^\s*(да|можно|можете|допускается|разрешено)\b|(?<!не\s)\b(можете|можно|допускается|разрешается)\b", re.I)
-EXCEPT = re.compile(r"за\s+исключением\s+([^),.;]+)|кроме\s+([^),.;]+)|исключени\w*\s+(?:является|—|-)?\s*([^),.;]+)", re.I)
+EXCEPT = re.compile(r"за\s+исключением\s+([^),.;]+)|кроме\s+([^),.;]+)|исключени\w*\s*(?:является|—|–|-|:)?\s*([^),.;]+)", re.I)
 
 
-def _ban_applies(summary, ban):
-    """Запрет по той же теме (≥ 2 общих основ) и не снят исключением, которое ответ называет («за исключением RFI»)."""
+def _ban_applies(summary, ban, clause=""):
+    """Запрет по той же теме (≥ 2 общих основ) и не снят исключением, которое ответ называет («за исключением RFI»).
+    Исключение ищется во всём пункте, не только в предложении с запретом (ДБРЦТ 8.4: «…запрещены. Исключение – наличие
+    гарантийного письма…», владелец 28.11)."""
     if len(stems(summary) & stems(ban)) < 2:
         return False
-    for m in EXCEPT.finditer(ban):
+    for m in EXCEPT.finditer(ban + " " + clause):
         exc = next(g for g in m.groups() if g)
         if stems(exc) & stems(summary) or any(w in summary for w in re.findall(r"\b[A-ZА-ЯЁ]{2,}\b", exc)):
             return False
@@ -323,7 +325,7 @@ def check(raw, windows, question=""):
             out["caveat"] = " ".join(x for x in _sentences(out["caveat"]) if not (set(NUM.findall(x)) - src))
     # разрешение в ответе при запрете в процитированном пункте → оговорка с цитатой запрета (судья: q145 «Да, можете…»)
     if out["steps"] and out.get("verdict") == "answer" and PERMIT.search(out.get("summary", "")):
-        bans = [(st.get("label") or f"п. {st['clause']}", x) for st in out["steps"] for x in _sentences(st["source_text"]) if BAN.search(x) and _ban_applies(out["summary"], x)]
+        bans = [(st.get("label") or f"п. {st['clause']}", x) for st in out["steps"] for x in _sentences(st["source_text"]) if BAN.search(x) and _ban_applies(out["summary"], x, st["source_text"])]
         if bans:
             clause, ban = bans[0]
             out["verdict"] = "answer_with_caveat"
