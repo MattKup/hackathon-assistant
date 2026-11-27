@@ -818,6 +818,11 @@ def analyze(windows, docs, llm, budget=300, k=8, k_cross=3, cross_share=0.2, vec
             uniq.append(f)
     for i, f in enumerate(uniq, 1):
         f["id"] = f"F{i:03d}"
+    # не подтверждённое перепроверкой — на разбор СК по приоритету: сигналы кода + согласие двух проходов этапа 1.
+    # Прогон 4: перепроверка qwen38 отклонила 5 из 7 ориентиров, а этот порядок ставит 6 из 7 в первые 18 из 60.
+    for f in review_rejected:
+        f["priority"] = round(f["score"] + sum(k in ("contradiction", "possible") for k in f.get("stage1_votes", [])), 3)
+    review_rejected.sort(key=lambda f: -f["priority"])
     for i, f in enumerate(review_rejected, 1):
         f["id"] = f"R{i:03d}"
     deps = dependencies(windows)
@@ -927,10 +932,13 @@ def render_md(report):
                 L.append("")
     rr = report.get("review_rejected") or []
     if rr:
-        L += [f"## Отклонено перепроверкой ({len(rr)}) — для разбора", "",
-              "Этап 1 (мягкий судья) счёл несостыковкой, большинство из трёх перепроверок (чек-лист, решает код) — нет.", ""]
+        L += [f"## Отклонено перепроверкой ({len(rr)}) — на разбор службе качества, по приоритету", "",
+              "Этап 1 (мягкий судья) счёл несостыковкой, большинство из трёх перепроверок (чек-лист, решает код) — нет. "
+              "Перепроверка локальной моделью склонна «примирять» пункты, поэтому раздел упорядочен по приоритету "
+              "(сигналы кода + согласие двух проходов этапа 1): начинайте разбор сверху.", ""]
         for f in rr:
-            L += [f"**{f['id']}. {_loc(f['a'])} ↔ п. {f['b']['clause']}** — этап 1: {KIND_SHORT.get(f.get('stage1_kind', f['kind']), f['kind'])}",
+            L += [f"**{f['id']}. {_loc(f['a'])} ↔ п. {f['b']['clause']}** — этап 1: {KIND_SHORT.get(f.get('stage1_kind', f['kind']), f['kind'])}"
+                  f" (проходы: {', '.join(KIND_SHORT.get(k, k) for k in f.get('stage1_votes', []))}; приоритет {f.get('priority')})",
                   f"- «{f['a']['quote']}» ↔ «{f['b']['quote']}»", f"- Этап 1: {f['explanation']}"]
             for v in f.get("votes", []):
                 L.append(f"- {VOTER_RU.get(v['voter'], v['voter'])} — {KIND_SHORT[v['kind']]}: {v['reason']}")
