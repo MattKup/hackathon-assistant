@@ -326,15 +326,16 @@ tr.rowlink:hover .chev{color:var(--ink)}
 <section id="p-settings" class="hide">
   <div class="ph"><div><h1>Настройки службы качества</h1><p>Меняются здесь и действуют сразу, без перезапуска и без программиста.</p></div></div>
   <div class="card setcard"><div class="hd"><b>Темы, которые разбирает служба качества</b><span class="sub">вне регламентов</span></div>
-    <div class="bd"><p class="meta">Вопрос сотрудника на такую тему помощник передаёт в службу качества, а не отвечает «вне регламентов». По одной теме в строке. Пустой список — общее правило: любой рабочий вопрос без ответа уходит в службу качества.</p>
+    <div class="bd"><p class="meta">Когда ответа в регламентах нет, помощник решает, рабочий ли это вопрос: рабочий уходит в службу качества, посторонний (бытовой, про рынок) получает отказ с кнопкой «Передать в службу качества». Любой вопрос об общих правилах работы в компании и так считается рабочим, даже если темы нет в списке. Список помогает в пограничных случаях: на 30 вопросах вне регламентов с ним все 30 разобраны верно, без него 27. Меняется здесь и действует сразу, без программиста. По одной теме в строке.</p>
     <textarea id="setTopics" rows="7"></textarea></div></div>
   <div class="card setcard"><div class="hd"><b>Мониторинг повторов</b></div>
     <div class="bd"><p class="meta">Если один и тот же вопрос (другими словами тоже) задали столько раз за период, служба качества получает сигнал письмом и в аналитике.</p>
     <div class="setrow"><div class="fld">Период, дней<input id="setPeriod" type="number" min="1" max="90"></div>
       <div class="fld">Порог, раз<input id="setThreshold" type="number" min="2" max="50"></div></div></div></div>
   <div class="card setcard"><div class="hd"><b>Обратите внимание — не из регламента</b><span class="sub">советы под ответом</span></div>
-    <div class="bd"><p class="meta">Если в вопросе есть слово-признак, под ответом по регламенту появится ваш совет — отдельным блоком, с пометкой «не из регламента». Одна строка — одно правило: «слова-признаки через запятую → совет». Внешние документы (закон, справка) загружаются в «Документах» с типом «Внешний источник» и тоже попадают в этот блок; в ответах по регламенту они не участвуют.</p>
-    <textarea id="setAspects" rows="7"></textarea></div></div>
+    <div class="bd"><p class="meta">Ответ всегда строго по регламенту. Под ним может появиться отдельный блок «Обратите внимание, не из регламента» из двух источников. Первый: правила службы качества ниже. Если в вопросе есть слова-признаки правила (с любыми окончаниями), под ответом появится совет. Одна строка, одно правило: «слова-признаки через запятую → совет». Правила ниже заполнены для примера, служба качества меняет их сама, без программиста. Второй источник: внешние документы (закон, справка), подключённые ниже. Они ищутся отдельно и в ответ по регламенту не попадают.</p>
+    <textarea id="setAspects" rows="7"></textarea>
+    <div class="meta" style="margin-top:12px"><b>Подключённые внешние источники</b><div id="extList">…</div><div style="margin-top:6px">Добавить: «Документы» → «Загрузить», тип «Внешний источник». Подключение правовых баз по API (КонсультантПлюс, Гарант) в планах развития.</div></div></div></div>
   <div class="foot"><button class="btn" id="setSave">Сохранить</button><span class="meta" id="setMsg"></span></div>
   <div class="card setcard" style="margin-top:24px"><div class="hd"><b>Демо-данные</b><span class="sub">перед показом</span></div>
     <div class="bd"><p class="meta">Очищает обращения, карточки знаний, журнал запросов, повторы, готовые ответы и список диалогов в этом браузере; решения по противоречиям возвращаются в «Ждут решения». Регламенты, загруженные документы и настройки остаются.</p>
@@ -399,6 +400,9 @@ async function loadSettings(){
   const st = await api("/api/settings");
   $("#setTopics").value = (st.qa_topics || []).join("\n");
   $("#setAspects").value = (st.aspects || []).join("\n");
+  const ext = (await api("/api/documents").catch(() => [])).filter(d => d.department === "EXTERNAL");
+  $("#extList").innerHTML = ext.length ? ext.map(d => `<div>📄 ${esc(d.display_title)} · ${esc(d.status || "")} · <button class="linkbtn" data-openext="${esc(d.doc_id)}">открыть</button></div>`).join("") : "<div>пока нет</div>";
+  $$("#extList [data-openext]").forEach(b => b.onclick = () => openDoc(b.dataset.openext));
   $("#setPeriod").value = st.repeat_monitor?.period_days ?? 7; $("#setThreshold").value = st.repeat_monitor?.threshold ?? 3;
   $("#setSave").onclick = async () => {
     const r = await api("/api/settings", {qa_topics: $("#setTopics").value.split("\n").map(t => t.trim()).filter(Boolean),
