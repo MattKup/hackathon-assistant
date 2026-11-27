@@ -99,3 +99,20 @@ class DiscrepancyTest(unittest.TestCase):
         s = Store(":memory:")
         s.add_discrepancy("q", "ДБРЦТ", "расходится с п. 8.4", ["P1"])
         self.assertEqual(s.discrepancies()[0]["practice_ids"], ["P1"])
+
+
+class SettingsTest(unittest.TestCase):
+    def test_overrides_apply_and_persist(self):
+        import tempfile
+        from pathlib import Path
+        from app import config
+        d = Path(tempfile.mkdtemp()) / "settings.json"
+        config.use_overrides(d)
+        try:
+            out = config.save_overrides({"qa_topics": ["командировки"], "secret": 1})
+            self.assertEqual(out["qa_topics"], ["командировки"])
+            self.assertNotIn("secret", d.read_text())
+            config.use_overrides(d)
+            self.assertEqual(config.qa_topics(), ["командировки"])
+        finally:
+            config._OVR_PATH, config._CFG = None, None

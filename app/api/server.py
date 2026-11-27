@@ -108,6 +108,8 @@ class App:
             self._pc0 = self.llm.prefix_cache()
             self.Hybrid = Hybrid
             self._rebuild_real()
+        from app import config as _config
+        _config.use_overrides(data / "settings.json")   # настройки СК из веба (темы СК, мониторинг повторов) поверх конфигурации
         rc = repeats.settings()                  # мониторинг повторов: период, порог, похожесть — из конфигурации
         similar = repeats.words_similar(rc["similarity_words"]) if mock else repeats.vectors_similar(self.tei.embed, rc["similarity"])
         self.repeats = Repeats(self.store.db, similar, rc)
@@ -395,6 +397,9 @@ def make_handler(app):
                 return self._json(200, app.store.cases())
             if self.path == "/api/discrepancies":
                 return self._json(200, app.store.discrepancies())
+            if self.path == "/api/settings":
+                from app import config as _config
+                return self._json(200, {k: _config.cfg().get(k) for k in _config.EDITABLE})
             if self.path == "/api/practices":
                 return self._json(200, app.store.practices(only_published=False))
             return self._json(404, {"error": "not found"})
@@ -455,6 +460,21 @@ def make_handler(app):
                                       b.get("destination"))
                     app.rebuild()
                     return self._json(200, {"ok": True})
+                if self.path == "/api/settings":          # служба качества меняет темы СК и мониторинг повторов
+                    from app import config as _config
+                    ch = {}
+                    if isinstance(b.get("qa_topics"), list):
+                        ch["qa_topics"] = [str(t).strip()[:80] for t in b["qa_topics"] if str(t).strip()][:30]
+                    rm = b.get("repeat_monitor")
+                    if isinstance(rm, dict):
+                        try:
+                            ch["repeat_monitor"] = {**repeats.settings(), "period_days": max(1, min(90, int(rm["period_days"]))),
+                                                    "threshold": max(2, min(50, int(rm["threshold"])))}
+                        except (KeyError, ValueError, TypeError):
+                            return self._json(400, {"error": "repeat_monitor: period_days и threshold — целые числа"})
+                    out = _config.save_overrides(ch)
+                    app.repeats.conf = repeats.settings()
+                    return self._json(200, out)
                 if self.path == "/api/qa/destination":    # куда ответ СК: база ответов (faq) или предложение в регламент
                     try:
                         app.store.set_destination(b["practice_id"], b.get("destination"))

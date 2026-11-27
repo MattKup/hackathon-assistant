@@ -12,11 +12,37 @@ CONFIG = Path(__file__).resolve().parents[1] / "config" / "documents.json"
 _CFG = None
 
 
+_OVR_PATH = None      # data/settings.json — настройки, изменённые службой качества в вебе (поверх config/documents.json)
+
+
 def cfg():
     global _CFG
     if _CFG is None:
         _CFG = json.loads(CONFIG.read_text())
+        if _OVR_PATH and Path(_OVR_PATH).exists():
+            _CFG.update(json.loads(Path(_OVR_PATH).read_text()))
     return _CFG
+
+
+EDITABLE = ("qa_topics", "repeat_monitor")
+
+
+def use_overrides(path):
+    """Сервер указывает файл настроек в своей папке данных; конфигурация перечитывается."""
+    global _OVR_PATH, _CFG
+    _OVR_PATH, _CFG = str(path), None
+
+
+def save_overrides(changes):
+    """Сохранить изменённые настройки (только разрешённые ключи) и применить сразу, без перезапуска."""
+    global _CFG
+    if not _OVR_PATH:
+        raise RuntimeError("файл настроек не задан")
+    cur = json.loads(Path(_OVR_PATH).read_text()) if Path(_OVR_PATH).exists() else {}
+    cur.update({k: v for k, v in changes.items() if k in EDITABLE})
+    Path(_OVR_PATH).write_text(json.dumps(cur, ensure_ascii=False, indent=2))
+    _CFG = None
+    return {k: cfg().get(k) for k in EDITABLE}
 
 
 def dept_ids(registry):

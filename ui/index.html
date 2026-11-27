@@ -173,6 +173,7 @@ nav button{padding:7px 10px}
     <button data-p="know" class="qa hide">Знания</button>
     <button data-p="conf" class="qa hide">Противоречия<span class="cnt hide" id="confCnt"></span></button>
     <button data-p="stats" class="qa hide">Аналитика</button>
+    <button data-p="settings" class="qa hide">Настройки</button>
     <button data-p="about">О системе</button>
   </nav>
   <div class="hright">
@@ -240,6 +241,17 @@ nav button{padding:7px 10px}
   <div class="card"><div class="hd"><b>Карточки знаний</b><span class="sub" id="knowCount"></span></div><div id="knowList"></div></div>
 </section>
 
+<section id="p-settings" class="hide">
+  <div class="ph"><div><h1>Настройки службы качества</h1><p>Меняются здесь и действуют сразу, без перезапуска и без программиста.</p></div></div>
+  <div class="card"><div class="hd"><b>Темы, которые разбирает служба качества</b><span class="sub">вне регламентов</span></div>
+    <p class="meta" style="margin:0 0 8px">Вопрос сотрудника на такую тему помощник передаёт в службу качества, а не отвечает «вне регламентов». По одной теме в строке. Пустой список — общее правило: любой рабочий вопрос без ответа уходит в службу качества.</p>
+    <textarea id="setTopics" rows="7"></textarea></div>
+  <div class="card"><div class="hd"><b>Мониторинг повторов</b></div>
+    <p class="meta" style="margin:0 0 8px">Если один и тот же вопрос (другими словами тоже) задали столько раз за период, служба качества получает сигнал письмом и в аналитике.</p>
+    <div class="chips" style="margin-top:0"><label class="chip">Период, дней <input id="setPeriod" type="number" min="1" max="90" style="width:64px"></label>
+      <label class="chip">Порог, раз <input id="setThreshold" type="number" min="2" max="50" style="width:64px"></label></div>
+    <div class="foot"><button class="btn" id="setSave">Сохранить</button><span class="meta ml" id="setMsg"></span></div></div>
+</section>
 <section id="p-conf" class="hide">
   <div class="ph"><div><h1>Противоречия</h1><p>Пары пунктов, которые расходятся между собой. Кандидатов находит анализатор (ночью) или разбор ответов; в ответах помощника участвуют только подтверждённые службой качества</p></div></div>
   <div class="kpis" id="confKpis"></div>
@@ -294,10 +306,19 @@ let session = null, notes = [], qa = false;
 const api = (u, b) => fetch(u, b === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(b)}).then(r => r.json());
 
 function go(p){ $$("#nav button").forEach(b => b.classList.toggle("on", b.dataset.p === p)); $$("main>section").forEach(s => s.classList.toggle("hide", s.id !== "p-" + p));
-  ({docs:loadDocs, cases:loadCases, know:loadKnow, conf:loadConf, stats:loadStats, about:loadAbout})[p]?.(); }
+  ({docs:loadDocs, cases:loadCases, know:loadKnow, conf:loadConf, stats:loadStats, settings:loadSettings, about:loadAbout})[p]?.(); }
+async function loadSettings(){
+  const st = await api("/api/settings");
+  $("#setTopics").value = (st.qa_topics || []).join("\n");
+  $("#setPeriod").value = st.repeat_monitor?.period_days ?? 7; $("#setThreshold").value = st.repeat_monitor?.threshold ?? 3;
+  $("#setSave").onclick = async () => {
+    const r = await api("/api/settings", {qa_topics: $("#setTopics").value.split("\n").map(t => t.trim()).filter(Boolean),
+      repeat_monitor: {period_days: +$("#setPeriod").value, threshold: +$("#setThreshold").value}});
+    $("#setMsg").textContent = r.error ? "Ошибка: " + r.error : "Сохранено — действует сразу"; };
+}
 $$("#nav button").forEach(b => b.onclick = () => go(b.dataset.p));
 $("#role").onchange = () => { qa = $("#role").value === "qa"; $$(".qa").forEach(x => x.classList.toggle("hide", !qa));
-  const cur = $("#nav button.on").dataset.p; go(!qa && ["cases","know","conf","stats"].includes(cur) ? "ask" : cur); if (qa) loadCount(); };
+  const cur = $("#nav button.on").dataset.p; go(!qa && ["cases","know","conf","stats","settings"].includes(cur) ? "ask" : cur); if (qa) loadCount(); };
 
 $$(".examples button").forEach(b => b.onclick = () => ask(b.textContent));
 $("#askForm").onsubmit = e => { e.preventDefault(); const v = $("#q").value.trim(); if (v) { $("#q").value = ""; ask(v); } };
