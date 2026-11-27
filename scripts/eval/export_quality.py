@@ -16,6 +16,8 @@ NAMES = {"single_dept": "Вопрос по одной дирекции", "needs_
 
 def main(runs_repo, *ids):
     runs = Path(runs_repo) / "runs"
+    notes = dict(i.split(":", 1) for i in ids if ":" in i)          # <id>:<подпись> — своя подпись прогона
+    ids = [i.split(":", 1)[0] for i in ids]
     dirs = [runs / i for i in ids] if ids else sorted(runs.glob("*-answer-eval"))
     out = []
     for d in dirs:
@@ -23,9 +25,9 @@ def main(runs_repo, *ids):
         if not mf.exists():
             continue
         m = json.loads(mf.read_text())
-        if m.get("questions", 0) < 100:
+        if m.get("questions", 0) < (20 if ids else 100):
             continue
-        note = json.loads(jf.read_text()).get("note", "") if jf.exists() else ""
+        note = notes.get(d.name) or (json.loads(jf.read_text()).get("note", "") if jf.exists() else "")
         meta = json.loads((d / "meta.json").read_text()) if (d / "meta.json").exists() else {}
         cls = {}
         for k, v in m.get("by_class", {}).items():
@@ -36,7 +38,8 @@ def main(runs_repo, *ids):
                     "outcome_ok": m["outcome_ok"], "extra_clarify": m.get("extra_clarify", 0),
                     "cite_hit": m.get("cite_hit"), "cite_total": (m.get("cite_hit") or 0) + (m.get("cite_miss") or 0),
                     "p50": m.get("p50_s"), "p95": m.get("p95_s"), "by_class": cls})
-    out.sort(key=lambda r: r["id"], reverse=True)
+    if not ids:
+        out.sort(key=lambda r: r["id"], reverse=True)        # с явным списком — порядок как задан (первый — в карточках «О системе»)
     q = {"runs": out,
          "stack": [["Qwen3.8", "модель ответа, локально (vLLM)"], ["bge-m3", "поиск по смыслу"],
                    ["bge-reranker-v2-m3", "ранжирование фрагментов"], ["doc-intel", "разбор и распознавание документов, собственная разработка"],
