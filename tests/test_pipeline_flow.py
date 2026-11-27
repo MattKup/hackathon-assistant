@@ -492,3 +492,20 @@ class DispatcherTest(unittest.TestCase):
     def test_same(self):
         t = self.run_on("same")
         self.assertIn("ниже по каждой", t.text)
+
+
+class OnePracticeTest(unittest.TestCase):
+    def test_same_practice_collapses(self):
+        from app.pipeline import _one_practice
+        st = [{"clause": "P1", "doc_title": "Практика службы качества"}]
+        rs = [{"label": d, "result": {"verdict": "answer", "steps": st}} for d in ("ТД", "ДБРЦТ", "ИБ")]
+        tr = []
+        out = _one_practice(rs, tr)
+        self.assertEqual(len(out), 1)
+        self.assertIn("Все дирекции", out[0]["label"])
+
+    def test_regulation_steps_kept(self):
+        from app.pipeline import _one_practice
+        rs = [{"label": "ТД", "result": {"verdict": "answer", "steps": [{"clause": "8.4", "doc_title": "Регламент"}]}},
+              {"label": "ИБ", "result": {"verdict": "answer", "steps": [{"clause": "P1", "doc_title": "Практика службы качества"}]}}]
+        self.assertIs(_one_practice(rs, []), rs)

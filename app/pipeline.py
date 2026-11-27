@@ -268,6 +268,25 @@ def _neighbors(clause):
     return out
 
 
+def _practice_ids(r):
+    steps = r["result"].get("steps") or []
+    if not steps or r["result"].get("verdict") == "no_answer":
+        return None
+    ids = {str(st.get("clause")) for st in steps if (st.get("doc_title") or "").startswith("Практика")}
+    return ids if len(ids) and len(ids) == len({str(st.get("clause")) for st in steps}) else None
+
+
+def _one_practice(results, tr):
+    """Кейс 3 (сценарий 27.11): карточка знания СК общая для компании — если все дирекции ответили только ею,
+    показываем один ответ, а не три одинаковых карточки."""
+    answered = [r for r in results if r["result"].get("verdict") != "no_answer"]
+    ids = [_practice_ids(r) for r in answered]
+    if len(answered) < 2 or any(i is None for i in ids) or any(i != ids[0] for i in ids):
+        return results
+    tr.append("Все дирекции ответили по одной карточке знания службы качества — показываю один ответ")
+    return [{**answered[0], "label": "Все дирекции (практика службы качества)"}]
+
+
 def needs_deep(res, support):
     if res["verdict"] == "answer_with_caveat" and (res.get("missing") or "").strip():
         return "в ответе не хватает: " + res["missing"].strip()[:120]
@@ -730,6 +749,9 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     def _finish(results, note=""):
         if all(r["result"]["verdict"] == "no_answer" for r in results):
             return escalate_or_scope(results)
+        one = _one_practice(results, tr)
+        if one is not results:
+            results, note = one, "Ответ по карточке знания службы качества — одинаков для всех дирекций."
         return _final(results, note, tr, hits, session, question, complex_)
 
     if intent == "out_of_scope" and best < OOS_SUPPORT and ("G1" in OFF or not in_scope_llm(llm, question)):
