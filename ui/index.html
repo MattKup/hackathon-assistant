@@ -336,6 +336,9 @@ tr.rowlink:hover .chev{color:var(--ink)}
     <div class="bd"><p class="meta">Если в вопросе есть слово-признак, под ответом по регламенту появится ваш совет — отдельным блоком, с пометкой «не из регламента». Одна строка — одно правило: «слова-признаки через запятую → совет». Внешние документы (закон, справка) загружаются в «Документах» с типом «Внешний источник» и тоже попадают в этот блок; в ответах по регламенту они не участвуют.</p>
     <textarea id="setAspects" rows="7"></textarea></div></div>
   <div class="foot"><button class="btn" id="setSave">Сохранить</button><span class="meta" id="setMsg"></span></div>
+  <div class="card setcard"><div class="hd"><b>Демо-данные</b><span class="sub">перед показом</span></div>
+    <div class="bd"><p class="meta">Очищает обращения, карточки знаний, журнал запросов, повторы, готовые ответы и список диалогов в этом браузере; решения по противоречиям возвращаются в «Ждут решения». Регламенты, загруженные документы и настройки остаются.</p>
+    <button class="btn" id="resetDemo">Сбросить демо-данные</button> <span class="meta" id="resetMsg"></span></div></div>
 </section>
 <section id="p-conf" class="hide">
   <div class="ph"><div><h1>Противоречия</h1><p>Пары пунктов, которые расходятся между собой. Кандидатов находит анализатор (ночью) или разбор ответов; в ответах помощника участвуют только подтверждённые службой качества</p></div></div>
@@ -402,6 +405,15 @@ async function loadSettings(){
       repeat_monitor: {period_days: +$("#setPeriod").value, threshold: +$("#setThreshold").value},
       aspects: $("#setAspects").value.split("\n").map(t => t.trim()).filter(Boolean)});
     $("#setMsg").textContent = r.error ? "Ошибка: " + r.error : "Сохранено — действует сразу"; };
+  $("#resetDemo").onclick = async () => {
+    if (!confirm("Сбросить демо-данные? Обращения, карточки знаний, журнал и диалоги будут удалены.")) return;
+    $("#resetMsg").textContent = "Сбрасываю…";
+    const r = await api("/api/admin/reset-demo", {}).catch(e => ({error: String(e)}));
+    if (r.error) { $("#resetMsg").textContent = "Ошибка: " + r.error; return; }
+    chats.length = 0; cur = null;                 // иначе страница сохранит диалоги из памяти обратно
+    try { localStorage.removeItem(CHKEY); } catch (e) {}
+    $("#resetMsg").textContent = "Готово";
+    setTimeout(() => location.reload(), 600); };
 }
 $$("#nav button").forEach(b => b.onclick = () => go(b.dataset.p));
 $("#role").onchange = () => { qa = $("#role").value === "qa"; $$(".qa").forEach(x => x.classList.toggle("hide", !qa));
@@ -714,7 +726,8 @@ async function loadAbout(){
   $("#aboutKpis").innerHTML = kpi("Верный исход", pc(r.outcome_ok, r.questions), `${r.outcome_ok} из ${r.questions} вопросов`)
     + kpi("Нет ответа → письмо в службу качества", `${noans.ok} из ${noans.total}`, "остальные — «вне регламентов»; ответов без опоры нет")
     + kpi("Нужный пункт в ответе", pc(r.cite_hit, r.cite_total), `${r.cite_hit} из ${r.cite_total}`)
-    + kpi("Время ответа p50", fmt(r.p50) + " с", "p95 " + fmt(r.p95) + " с") + kpi("Внешних API", "0", "всё на этом сервере");
+    + kpi("Время ответа p50", fmt(r.p50) + " с", "p95 " + fmt(r.p95) + " с") + kpi("Внешних API", "0", "всё на этом сервере")
+    + kpi("Сервер", "1 × RTX 5090", "потребительская видеокарта 32 ГБ; ≈ 0,0075 ₽ электричества на вопрос");
   $("#runSub").textContent = `последний прогон ${r.date.slice(6,8)}.${r.date.slice(4,6)} · ${r.questions} вопросов по 4 регламентам`;
   const ok = Object.values(cls).reduce((a,c) => a + c.ok, 0), all = Object.values(cls).reduce((a,c) => a + c.total, 0);
   $("#qBar").innerHTML = `<span style="width:${100*ok/all}%;background:var(--green)"></span><span style="width:${100*(all-ok)/all}%;background:var(--faint)"></span>`;

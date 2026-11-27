@@ -568,9 +568,15 @@ def make_handler(app):
                     out["session"] = sid
                     return self._json(200, out)
                 if self.path == "/api/admin/reset-demo":   # очистить обращения, карточки, журнал (демо)
-                    app.store.db.executescript("delete from cases; delete from mails; delete from practices; delete from drafts; "
-                                               "delete from discrepancies;")
-                    app.store.db.commit()
+                    def _commit(db):                      # повторный сброс: транзакции может не быть (sqlite «no transaction is active»)
+                        try:
+                            db.commit()
+                        except Exception:
+                            pass
+                    for sql in ("delete from cases", "delete from mails", "delete from practices", "delete from drafts",
+                                "delete from discrepancies"):
+                        app.store.db.execute(sql)
+                    _commit(app.store.db)
                     # Fable 27.11: сброс демо должен возвращать и решения по противоречиям, и счётчик повторов
                     for sql in ("delete from escalation_log", "delete from repeat_signals",
                                 "update conflict_pairs set status='candidate', decided_by=null, decided_at=null, comment=null"):
@@ -578,7 +584,7 @@ def make_handler(app):
                             app.conflict_reg.db.execute(sql) if "conflict" in sql else app.store.db.execute(sql)
                         except Exception:
                             pass
-                    app.store.db.commit(); app.conflict_reg.db.commit()
+                    _commit(app.store.db); _commit(app.conflict_reg.db)
                     app.conflicts = None                  # перечитать подтверждённые пары при следующем вопросе
                     app.log.write_text("")
                     app.sessions.clear()
