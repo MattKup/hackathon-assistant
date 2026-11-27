@@ -310,7 +310,9 @@ function add(html, who){ $("#empty")?.remove(); const d = document.createElement
 async function ask(question, choice, choiceLabel){
   add(`<span class="q">${esc(choiceLabel || question)}</span>`, "user");
   const w = add(`<span class="meta"><span class="spin"></span> Разбираю вопрос и ищу в регламентах…</span>`, "bot");
+  const t0 = performance.now();
   const r = await api("/api/ask", {session, question, choice, employee, no_clarify: !!$("#noClarify")?.checked, hints: !!$("#hints")?.checked}).catch(e => ({error:String(e)}));
+  r.client_seconds = Math.round((performance.now() - t0) / 100) / 10;   // с сетью — для сравнения со временем на стенде
   w.remove();
   if (r.error) return add(`<div class="caveat">Ошибка: ${esc(r.error)}</div>`, "bot");
   session = r.session; add(render(r), "bot"); bind();
@@ -366,7 +368,7 @@ function render(r){
   }
   const nt = r.trace?.length || 0;
   h += `<details class="how"><summary>Как найден ответ · ${nt} ${plural(nt, "шаг", "шага", "шагов")}</summary><ol>${(r.trace||[]).map(t => `<li>${esc(cap(t))}</li>`).join("")}</ol></details>
-    <div class="foot meta">${String(r.seconds).replace(".", ",")} с${(r.answers||[]).length && r.answers.every(a => a.from_cache) ? " · из кэша" : ""}${r.tokens?.calls != null ? ` · вызовов модели ${r.tokens.calls}` : ""} · локальная модель · внешних запросов 0<span class="ml"></span>
+    <div class="foot meta"><span title="Время работы помощника на стенде (поиск + модель + проверки), без сети">на стенде ${String(r.seconds).replace(".", ",")} с</span>${r.client_seconds ? ` <span title="С учётом сети до стенда">(с сетью ${String(r.client_seconds).replace(".", ",")} с)</span>` : ""}${(r.answers||[]).length && r.answers.every(a => a.from_cache) ? " · из кэша" : ""}${r.tokens?.calls != null ? ` · вызовов модели ${r.tokens.calls}` : ""} · локальная модель · внешних запросов 0<span class="ml"></span>
       ${!["clarify","ask"].includes(r.outcome) ? `<button class="iconbtn" data-fb="up">👍</button><button class="iconbtn" data-fb="down">👎</button>` : ""}</div>`;
   return h;
 }
