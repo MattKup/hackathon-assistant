@@ -794,7 +794,10 @@ function jump(page, sel){ go(page); let n = 0;
   const t = setInterval(() => { const el = $(sel); if (el || ++n > 30) { clearInterval(t);
     if (el) { el.scrollIntoView({block:"center", behavior:"smooth"}); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 2500); } } }, 100); }
 
-if (chats.length) openChat(chats[0]); else newChat();
+try { if (chats.length) openChat(chats[0]); else newChat(); }
+catch (e) {   // диалог, сохранённый прежней версией веба, не открылся: начинаем с чистого списка, а не с белого экрана
+  console.warn("сохранённые диалоги не открылись, список очищен", e);
+  chats = []; cur = null; try { localStorage.removeItem(CHKEY); } catch (_) {} newChat(); }
 // автообновление «Обращений» не трогает недописанный ответ эксперта (Fable 27.11: текст стирался каждые 10 с)
 const typing = () => [...document.querySelectorAll("#caseList textarea")].some(t => t.value.trim() || t === document.activeElement);
 setInterval(() => { if (qa) loadCount(); if (!$("#p-cases").classList.contains("hide") && !typing()) loadCases(); }, 10000);
