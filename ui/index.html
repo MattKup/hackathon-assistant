@@ -421,7 +421,7 @@ async function loadSettings(){
     setTimeout(() => location.reload(), r.error ? 2500 : 600); };
 }
 $$("#nav button").forEach(b => b.onclick = () => go(b.dataset.p));
-$("#role").onchange = () => { qa = $("#role").value === "qa"; $$(".qa").forEach(x => x.classList.toggle("hide", !qa));
+$("#role").onchange = () => { qa = $("#role").value === "qa"; try { localStorage.setItem("assistant-role", $("#role").value); } catch (e) {} $$(".qa").forEach(x => x.classList.toggle("hide", !qa));
   const cur = $("#nav button.on").dataset.p; go(!qa && ["cases","know","conf","stats","settings"].includes(cur) ? "ask" : cur); if (qa) loadCount(); fitHeader(); };
 
 bindExamples();
@@ -808,6 +808,8 @@ try { if (chats.length) openChat(chats[0]); else newChat(); }
 catch (e) {   // диалог, сохранённый прежней версией веба, не открылся: начинаем с чистого списка, а не с белого экрана
   console.warn("сохранённые диалоги не открылись, список очищен", e);
   chats = []; cur = null; try { localStorage.removeItem(CHKEY); } catch (_) {} newChat(); }
+// роль переживает обновление страницы (владелец 28.11: в режиме СК обновление возвращало «Сотрудника»)
+try { if (localStorage.getItem("assistant-role") === "qa") { $("#role").value = "qa"; $("#role").onchange(); } } catch (e) {}
 // автообновление «Обращений» не трогает недописанный ответ эксперта (Fable 27.11: текст стирался каждые 10 с)
 const typing = () => [...document.querySelectorAll("#caseList textarea")].some(t => t.value.trim() || t === document.activeElement);
 setInterval(() => { if (qa) loadCount(); if (!$("#p-cases").classList.contains("hide") && !typing()) loadCases(); }, 10000);
