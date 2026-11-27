@@ -4,7 +4,7 @@
 # вопрос уйдёт в Службу качества): перед показом — «Сбросить демо-данные».
 set -uo pipefail
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 pistonvlm"
-Q="${1:?вопрос}"
+Q="${1:-}"; [ -z "$Q" ] || [ "$Q" = file ] && Q=$(head -1 "$(dirname "$0")/ask_debug_question.txt")
 BODY=$(python3 -c 'import json,sys; print(json.dumps({"question": sys.argv[1]}, ensure_ascii=False))' "$Q")
 $SSH "curl -sS -m 120 -H 'Content-Type: application/json' -d @- http://127.0.0.1:19650/api/ask" <<< "$BODY" > "$RUN_DIR/answer.json"
 python3 - "$RUN_DIR/answer.json" <<'PY' | tee "$RUN_DIR/summary.txt"
