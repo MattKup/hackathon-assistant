@@ -36,3 +36,10 @@ class Related(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Cut(unittest.TestCase):
+    def test_word_boundary(self):
+        from app.pipeline import _cut
+        self.assertEqual(_cut("один два три", 9), "один два")
+        self.assertEqual(_cut("коротко", 50), "коротко")

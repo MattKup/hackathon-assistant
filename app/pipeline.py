@@ -289,6 +289,11 @@ EXC_RE = re.compile(r"исключени|за исключением|\bкром�
                     r"в случае (?:нарушени|отказ|уклонени|непредоставлени|несоблюдени|отсутстви)|отклоня|не позднее|не допускается", re.I)
 
 
+def _cut(text, n):
+    """Выдержка не длиннее n знаков, по границе слова (судья Г15: 18 из 33 выдержек были обрезаны посреди слова)."""
+    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0].rstrip(",;:")
+
+
 def related_clauses(question, res, ws, index, limit=2):
     """Г15 (владелец 27.11, реплика организатора: «заставить ИИ сказать, что у неё нет полного ответа»): кодом, без модели —
     пункты того же документа рядом с процитированными или упомянутые в них, где есть исключение / особое условие / срок
@@ -319,7 +324,8 @@ def related_clauses(question, res, ws, index, limit=2):
         t = w.get("text", "")
         if not EXC_RE.search(t) or len(_st(t) & topic) < 3:
             continue
-        out.append({"clause": c, "doc_title": w.get("doc_title") or "", "why": why, "quote": " ".join(t.split())[:260]})
+        title = w.get("doc_title") or next((x.get("doc_title") for x in ws if x.get("doc_id") == d and x.get("doc_title")), "")
+        out.append({"clause": c, "doc_title": title, "why": why, "quote": _cut(" ".join(t.split()), 260)})
         if len(out) >= limit:
             break
     return out
@@ -883,7 +889,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                     meta.update({k: v for k, v in d["meta"].items() if k in ("prompt_tokens", "completion_tokens")})
         meta["clauses_seen"] = [w["clause"] for w in ws]
         meta["context_chars"] = sum(len(w["text"]) for w in ws)
-        if "G15" not in OFF:
+        if session.get("hints") or "G15" in ON:   # Г15 — опция (владелец 27.11): по умолчанию выключена, включается в чате или HK_ON=G15
             rel = related_clauses(question, res, ws, index)
             if rel:
                 res = {**res, "related": rel}

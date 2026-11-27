@@ -186,7 +186,7 @@ nav button{padding:7px 10px}
   <div class="ph"><div><h1>Спросить</h1><p>Ответ по регламентам проектной деятельности — с точными пунктами</p></div></div>
   <div class="ask">
     <div class="card dialog">
-      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="meta ml" title="Без уточняющих вопросов: сразу ответы по всем дирекциям"><input type="checkbox" id="noClarify"> без уточнений</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
+      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="meta ml" title="Без уточняющих вопросов: сразу ответы по всем дирекциям"><input type="checkbox" id="noClarify"> без уточнений</label><label class="meta" title="Экспериментальная опция: если рядом с процитированным пунктом есть пункт с исключением или особым условием по той же теме, помощник покажет его дословно — «проверьте также п. X». Подсказку строит код, без модели. На наших 4 регламентах чаще даёт лишние пункты, чем нужные; польза ожидается на большой базе и с другой моделью."><input type="checkbox" id="hints"> подсказки «проверьте также»</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
       <div class="msgs" id="msgs">
         <div class="empty" id="empty">Спросите о пресейле, расчёте, ТКП, договоре, старте или ведении проекта.<br>Если ответа нет в регламентах — передам вопрос в службу качества.
           <div class="examples">
@@ -309,7 +309,7 @@ function add(html, who){ $("#empty")?.remove(); const d = document.createElement
 async function ask(question, choice, choiceLabel){
   add(`<span class="q">${esc(choiceLabel || question)}</span>`, "user");
   const w = add(`<span class="meta"><span class="spin"></span> Разбираю вопрос и ищу в регламентах…</span>`, "bot");
-  const r = await api("/api/ask", {session, question, choice, employee, no_clarify: !!$("#noClarify")?.checked}).catch(e => ({error:String(e)}));
+  const r = await api("/api/ask", {session, question, choice, employee, no_clarify: !!$("#noClarify")?.checked, hints: !!$("#hints")?.checked}).catch(e => ({error:String(e)}));
   w.remove();
   if (r.error) return add(`<div class="caveat">Ошибка: ${esc(r.error)}</div>`, "bot");
   session = r.session; add(render(r), "bot"); bind();
