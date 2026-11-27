@@ -188,6 +188,18 @@ SAME_SYSTEM = ("Сравни ответы разных дирекций на о�
                "условие, отвечающее на вопрос. difference — коротко, в чём различие по сути вопроса.")
 SAME_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["same", "difference"],
                "properties": {"same": {"type": "boolean"}, "difference": {"type": "string", "maxLength": 200}}}
+# Г20 (П3 разбора лишних уточнений 27.11, review/clarify_review_27-11_journal.md): сначала различие, потом решение;
+# молчание одной дирекции не различие; в вопросах «что делать / как» сравнивается действие, а не исполнитель. HK_ON=G20
+SAME_SYSTEM2 = ("Сравни ответы разных дирекций на один вопрос сотрудника. Сначала в difference коротко запиши, что каждая "
+                "дирекция ПРЯМО устанавливает по сути вопроса и в чём разница; затем same. Сравнивай только ответ на сам вопрос: "
+                "«кто» — ответственная роль; «когда / за сколько» — срок; «можно ли» — решение и условие; «что делать / как» — "
+                "само действие, а не исполнителя. Различие есть, только если обе дирекции прямо устанавливают разное. Если одна "
+                "дирекция об этом молчит, не указывает, не запрещает или отвечает с оговоркой, что случай не оговорён, это не "
+                "различие. Лишние подробности, шаги или системы одной дирекции не различие. same=true, если по сути вопроса "
+                "прямо установленное совпадает.")
+SAME_SCHEMA2 = {"type": "object", "additionalProperties": False, "required": ["difference", "same"],
+                "properties": {"difference": {"type": "string", "maxLength": 300}, "same": {"type": "boolean"}}}
+VERDICT_RU = {"answer": "прямой ответ", "answer_with_caveat": "ответ с оговоркой", "conflict": "противоречие в регламенте"}
 
 
 DISPATCH_SYSTEM = (
@@ -237,9 +249,11 @@ def answers_same(llm, question, answered):
     for r in answered:
         res = r["result"]
         steps = "; ".join(f"{st.get('text', '')} ({st.get('who', '')} {st.get('deadline', '')})".strip() for st in res.get("steps", []))
-        blocks.append(f"{r['label']}: {res.get('summary', '')} Шаги: {steps} Оговорка: {res.get('caveat', '')}")
+        kind = f" ({VERDICT_RU.get(res.get('verdict'), res.get('verdict'))})" if "G20" in ON else ""
+        blocks.append(f"{r['label']}{kind}: {res.get('summary', '')} Шаги: {steps} Оговорка: {res.get('caveat', '')}")
+    sysmsg, schema, mt = (SAME_SYSTEM2, SAME_SCHEMA2, 200) if "G20" in ON else (SAME_SYSTEM, SAME_SCHEMA, 120)
     try:
-        js, _ = llm.chat_json(SAME_SYSTEM, f"Вопрос: {question}\n\n" + "\n\n".join(blocks), SAME_SCHEMA, max_tokens=120)
+        js, _ = llm.chat_json(sysmsg, f"Вопрос: {question}\n\n" + "\n\n".join(blocks), schema, max_tokens=mt)
         return bool(js.get("same")), js.get("difference", "")
     except Exception:
         return False, ""
@@ -1047,7 +1061,8 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             except Exception as e:
                 d, meta["deep_error"] = None, str(e)[:120]
             if d:
-                meta["deep"] = {"why": why, "added": d["added"], "better": d["better"], "verdict2": d["res"]["verdict"]}
+                meta["deep"] = {"why": why, "added": d["added"], "better": d["better"], "verdict2": d["res"]["verdict"],
+                                "verdict1": res["verdict"]}
                 if d["better"]:
                     res, ws = d["res"], d["ws"]
                     meta.update({k: v for k, v in d["meta"].items() if k in ("prompt_tokens", "completion_tokens")})
@@ -1099,9 +1114,18 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         if d == "per_department":
             complex_ = True
             return _finish(answered, note)
-    if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
+    # Г19 (П1 разбора лишних уточнений 27.11): решение «спросить дирекцию» — только по дирекциям, ответившим с первого прохода;
+    # ответ, поднятый глубоким проходом из «нет ответа» или из оговорки, показывается, но уточнения не вызывает
+    # (8 прогонов v4: такой подъём дал 17 лишних уточнений и 1 верное). Перекрёстный проход (Г17) не трогаем. HK_ON=G19
+    decide = answered
+    if "G19" in ON:
+        decide = [r for r in answered if not ((r["meta"].get("deep") or {}).get("better") and not (r["meta"].get("deep") or {}).get("cross"))]
+        if len(decide) < len(answered):
+            tr.append("Для решения об уточнении беру только дирекции, ответившие с первого прохода: "
+                      + (", ".join(r["label"] for r in decide) or "таких нет"))
+    if len(decide) >= 2 and len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
         live(session, "compare")
-        same, diff = (False, "") if "G9" in ON else answers_same(llm, question, answered)
+        same, diff = (False, "") if "G9" in ON else answers_same(llm, question, decide)
         if same:
             tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и по сути одинаков — уточнять не нужно")
             return _finish(answered, _same_header(answered, note))
