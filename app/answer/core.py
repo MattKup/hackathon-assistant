@@ -25,6 +25,16 @@ _OFF = set(_os.environ.get("HK_OFF", "").split(","))
 if "G3" not in _OFF:
     SYSTEM = SYSTEM.replace("\n3. Если фрагменты", "\n" + MATCH_RULE + "3. Если фрагменты", 1)
 SCHEMA = json.loads((PROMPTS / "answer.schema.json").read_text())
+CONSIDER_ITEM = {"type": "object", "additionalProperties": False, "required": ["text", "ref", "quote"],
+                 "properties": {"text": {"type": "string", "maxLength": 220}, "ref": {"type": "string", "pattern": "^w[0-9]+$"},
+                                "quote": {"type": "string", "maxLength": 300}}}
+SCHEMA_CONSIDER = {**SCHEMA, "required": SCHEMA["required"] + ["consider"],
+                   "properties": {**SCHEMA["properties"], "consider": {"type": "array", "maxItems": 3, "items": CONSIDER_ITEM}}}
+CONSIDER_RULE = ("\n\nУЧТИТЕ ТАКЖЕ (поле consider): как эксперт службы качества, добавь 0–3 пункта из ЭТИХ ЖЕ фрагментов, которые "
+                 "сотруднику нужно знать, чтобы правильно действовать в его ситуации, но которых нет в прямом ответе: исключение или "
+                 "особое условие, срок, кто согласует или отвечает, обязательный следующий шаг, запрет, связанный с ситуацией. "
+                 "Каждый — с ref и дословной quote из фрагмента. Не повторяй шаги ответа, не добавляй общих сведений не по ситуации "
+                 "и ничего, чего нет во фрагментах. Если добавить нечего — пустой массив. При verdict = no_answer — пустой массив.")
 NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
 
@@ -364,10 +374,36 @@ def abbr_note(windows):
     return ("\nСокращения в этих фрагментах (расшифровки из текста документов): " + "; ".join(found[:20])) if found else ""
 
 
-def answer(llm, question, windows, dept_label, terms="", thinking=False):
+def answer(llm, question, windows, dept_label, terms="", thinking=False, consider=False):
     kw = {"thinking": True} if thinking else {}
     user = build_user(question, windows, dept_label, terms)
     if "G12" not in set(_os.environ.get("HK_OFF", "").split(",")):   # Г12 по умолчанию включена (выбор владельца 27.11); замер без неё — HK_OFF=G12
         user += abbr_note(windows)
-    raw, meta = llm.chat_json(SYSTEM, user, SCHEMA, **kw)
-    return check(raw, windows, question), meta
+    if consider:
+        user += CONSIDER_RULE
+    raw, meta = llm.chat_json(SYSTEM, user, SCHEMA_CONSIDER if consider else SCHEMA, **kw)
+    out = check(raw, windows, question)
+    if consider:
+        out = check_consider(out, raw, windows, question)
+    return out, meta
+
+
+def check_consider(out, raw, windows, question):
+    """Г16: пункты «Учтите также» — те же проверки кодом, что у шагов (дословная цитата, числа и роли из пункта);
+    без повтора пунктов ответа; отброшенные — в rejected с пометкой."""
+    if out.get("verdict") == "no_answer":
+        return {**out, "consider": []}
+    chk = check({"steps": raw.get("consider") or []}, windows, question)
+    used = {(st.get("doc_title"), str(st.get("clause"))) for st in out.get("steps", [])}
+    keep = []
+    for st in chk["steps"]:
+        if st.get("replaced"):                     # подменённый цитатой пересказ — не подсказка, а повтор текста пункта
+            out["rejected"].append({**st, "reason": "consider_" + st["replaced"]})
+            continue
+        if (st.get("doc_title"), str(st.get("clause"))) in used:
+            out["rejected"].append({**st, "reason": "consider_same_clause"})
+            continue
+        used.add((st.get("doc_title"), str(st.get("clause"))))
+        keep.append(st)
+    out["rejected"] += [{**r, "reason": "consider_" + r.get("reason", "")} for r in chk["rejected"] if not r.get("replaced_by_quote")]
+    return {**out, "consider": keep}

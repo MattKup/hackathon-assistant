@@ -186,7 +186,7 @@ nav button{padding:7px 10px}
   <div class="ph"><div><h1>Спросить</h1><p>Ответ по регламентам проектной деятельности — с точными пунктами</p></div></div>
   <div class="ask">
     <div class="card dialog">
-      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="meta ml" title="Без уточняющих вопросов: сразу ответы по всем дирекциям"><input type="checkbox" id="noClarify"> без уточнений</label><label class="meta" title="Экспериментальная опция: если рядом с процитированным пунктом есть пункт с исключением или особым условием по той же теме, помощник покажет его дословно — «проверьте также п. X». Подсказку строит код, без модели. На наших 4 регламентах чаще даёт лишние пункты, чем нужные; польза ожидается на большой базе и с другой моделью."><input type="checkbox" id="hints"> подсказки «проверьте также»</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
+      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="meta ml" title="Без уточняющих вопросов: сразу ответы по всем дирекциям"><input type="checkbox" id="noClarify"> без уточнений</label><label class="meta" title="Экспериментальная опция: если рядом с процитированным пунктом есть пункт с исключением или особым условием по той же теме, помощник покажет его дословно — «проверьте также п. X». Подсказку строит код, без модели. На наших 4 регламентах чаще даёт лишние пункты, чем нужные; польза ожидается на большой базе и с другой моделью."><input type="checkbox" id="hints"> подсказки «проверьте также»</label><label class="meta" title="Как эксперт службы качества: кроме прямого ответа помощник добавляет 1–3 пункта из найденных регламентов, которые важны в ситуации сотрудника, — исключения, сроки, кто согласует, следующий шаг. Каждый пункт — с дословной цитатой, её сверяет код."><input type="checkbox" id="consider"> «учтите также»</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
       <div class="msgs" id="msgs">
         <div class="empty" id="empty">Спросите о пресейле, расчёте, ТКП, договоре, старте или ведении проекта.<br>Если ответа нет в регламентах — передам вопрос в службу качества.
           <div class="examples">
@@ -310,7 +310,7 @@ function add(html, who){ $("#empty")?.remove(); const d = document.createElement
 async function ask(question, choice, choiceLabel){
   add(`<span class="q">${esc(choiceLabel || question)}</span>`, "user");
   const w = add(`<span class="meta"><span class="spin"></span> Разбираю вопрос и ищу в регламентах…</span>`, "bot");
-  const r = await api("/api/ask", {session, question, choice, employee, no_clarify: !!$("#noClarify")?.checked, hints: !!$("#hints")?.checked}).catch(e => ({error:String(e)}));
+  const r = await api("/api/ask", {session, question, choice, employee, no_clarify: !!$("#noClarify")?.checked, hints: !!$("#hints")?.checked, consider: !!$("#consider")?.checked}).catch(e => ({error:String(e)}));
   w.remove();
   if (r.error) return add(`<div class="caveat">Ошибка: ${esc(r.error)}</div>`, "bot");
   session = r.session; add(render(r), "bot"); bind();
@@ -338,6 +338,8 @@ function render(r){
         const who = [s.who, s.deadline].filter(Boolean).join(", ");
         return `<li>${esc(s.text)}${who ? ` <span class="who">— ${esc(who)}</span>` : ""}<sup class="fn" data-n="${n}">${n}</sup></li>`; }).join("") + `</ol>`;
       if (a.caveat) h += `<div class="caveat">⚠︎ <span>${esc(a.caveat)}</span></div>`;
+      if (a.consider?.length) h += `<div class="lbl">Учтите также</div><ul class="steps">` + a.consider.map(s => { notes.push(s); const n = notes.length; used.push(n);
+        return `<li>${esc(s.text)}<sup class="fn" data-n="${n}">${n}</sup></li>`; }).join("") + `</ul>`;
       if (a.related?.length) h += `<div class="caveat">☞ <span><b>Ответ может быть неполным — проверьте также:</b>` + a.related.map(x => `<br>п. ${esc(x.clause)}${x.doc_title ? ` «${esc(x.doc_title)}»` : ""} (${esc(x.why)}): <i>${esc(x.quote)}…</i>`).join("") + `</span></div>`;
       if (a.missing && ["answer","answer_with_caveat"].includes(a.verdict)) h += `<p class="meta">В найденных пунктах нет: ${esc(a.missing)}</p>`;
       if (a.conflict_with?.length) h += a.conflict_with.map(c => `<div class="caveat">⚖︎ <span><b>Противоречие с п. ${esc(c.clause)}:</b> ${esc(c.why)}${c.text ? `<br><i>${esc(c.text)}</i>` : ""}</span></div>`).join("");

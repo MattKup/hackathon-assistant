@@ -216,10 +216,12 @@ class App:
         return self.hy.search(q, k=k, allowed=allowed)[0]
 
     # --- ход диалога ---
-    def ask(self, sid, question, choice=None, employee="", no_clarify=None, hints=None):
+    def ask(self, sid, question, choice=None, employee="", no_clarify=None, hints=None, consider=None):
         s = self.sessions.setdefault(sid, {"docs": [], "clarifications": 0, "history": [], "pending": None})
         if no_clarify is not None:
             s["no_clarify"] = bool(no_clarify)      # режим «без уточнения дирекции»: сразу ответы по всем дирекциям
+        if consider is not None:
+            s["consider"] = bool(consider)          # Г16 (опция): «Учтите также» — что ещё важно в ситуации, с цитатами
         if hints is not None:
             s["hints"] = bool(hints)                # Г15 (опция): «проверьте также п. X» — соседние пункты с исключением
         q = question
@@ -255,6 +257,8 @@ class App:
                                        {k: st.get(k, "") for k in ("text", "who", "deadline", "quote", "clause", "doc_title", "department", "source_text", "section", "label")}
                                        | {"practice": st.get("doc_title", "").startswith("Практика")} for st in r["steps"]],
                                    "related": r.get("related", []),
+                                   "consider": [{k: st.get(k, "") for k in ("text", "clause", "doc_title", "quote", "source_text", "department", "section", "label")}
+                                                for st in r.get("consider", [])],
                                    "conflict_with": [{"clause": c["clause"], "why": c.get("why", ""), "text": c.get("text", "")[:600]}
                                                      for c in r.get("conflict_with", [])],
                                    "deep": bool((a.get("meta") or {}).get("deep", {}).get("better")),
@@ -414,7 +418,7 @@ def make_handler(app):
             try:
                 if self.path == "/api/ask":
                     sid = b.get("session") or uuid.uuid4().hex
-                    out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""), b.get("no_clarify"), b.get("hints"))
+                    out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""), b.get("no_clarify"), b.get("hints"), b.get("consider"))
                     out["session"] = sid
                     return self._json(200, out)
                 if self.path == "/api/admin/reset-demo":   # очистить обращения, карточки, журнал (демо)

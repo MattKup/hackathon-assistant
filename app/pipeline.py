@@ -343,7 +343,7 @@ def needs_deep(res, support):
     return ""
 
 
-def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index, answer_cache, why, terms=""):
+def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index, answer_cache, why, terms="", consider=False):
     """Агентный проход (идея владельца 26.11: слабые ответы — сразу через агента): добрать пункты, на которые ссылается
     текст, соседние пункты и пункты по недостающему, ответить второй раз и оставить лучший ответ."""
     have = {w["window_id"] for w in ws}
@@ -382,7 +382,7 @@ def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index,
         hint = ((terms + "; ") if terms else "") + (f"по оценке поиска на вопрос, вероятно, отвечает {ref_label(top)}; сопоставь слова "
                                                     "вопроса с его терминами — если он отвечает по смыслу, это ответ, иначе no_answer")
     think = "G10" in ON and res.get("verdict") == "no_answer"   # Г10: рассуждение — только для отказов
-    res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache, hint, think)
+    res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache, hint, think, consider)
     better = (VERDICT_RANK.get(res2["verdict"], 0), len(res2.get("steps", []))) > (VERDICT_RANK.get(res["verdict"], 0), len(res.get("steps", [])))
     return {"res": res2, "meta": meta2, "ws": ws2, "better": better, "added": len(extra), "why": why}
 
@@ -505,15 +505,15 @@ def fit_tokens(llm, q, ws, label_):
     return ws
 
 
-def cached_answer(llm, q, ws, label_, cache, terms="", thinking=False):
+def cached_answer(llm, q, ws, label_, cache, terms="", thinking=False, consider=False):
     thinking = thinking or "G11" in ON           # Г11: рассуждение во всех ответах (замер «думающей» модели)
     if cache is None:
-        return llm_answer(llm, q, ws, label_, terms, thinking)
-    k = cache.key("answer", norm_q(q), label_, tuple(w["window_id"] for w in ws), terms, thinking)
+        return llm_answer(llm, q, ws, label_, terms, thinking, consider)
+    k = cache.key("answer", norm_q(q), label_, tuple(w["window_id"] for w in ws), terms, thinking) + ("+consider" if consider else "")
     hit = cache.get(k)
     if hit is not None:
         return hit[0], {**hit[1], "from_cache": True}
-    res, meta = llm_answer(llm, q, ws, label_, terms, thinking)
+    res, meta = llm_answer(llm, q, ws, label_, terms, thinking, consider)
     cache.put(k, (res, meta))
     return res, meta
 
@@ -861,6 +861,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     complex_ = len(depts) >= 2 and (session.get("complex") or len({by_id[d]["department"] for d in named}) >= 2)
 
     index = session.get("_index")
+    consider = bool(session.get("consider")) or "G16" in ON    # Г16 «Учтите также» — опция (заказчик 27.11)
     # 4. ответ по каждой дирекции — параллельно; контекст — по бюджету в знаках (решение 24.11: ≈ 21 тыс. знаков),
     #    а не по числу окон: на PDF окна до 2 400 знаков, 18 окон переполнили бы контекст модели
     def one(dep):
@@ -877,7 +878,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         wst = _st(" ".join(w["text"] for w in ws))
         t_dep = "; ".join(x for x in terms.split("; ") if x and (x.startswith("в вопросе ") or (_st(x) and len(_st(x) & wst) * 2 >= len(_st(x))))) if terms else ""
         try:
-            res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache, t_dep)
+            res, meta = cached_answer(llm, q, ws, names.get(dep, dep), answer_cache, t_dep, consider=consider)
         except Exception as e:             # сбой по одной дирекции не роняет весь ход (ревью Fable К12)
             res = {"verdict": "no_answer", "summary": "", "steps": [], "rejected": [], "caveat": "",
                    "missing": "ответ не получен из-за сбоя модели", "error": str(e)[:120]}
@@ -886,7 +887,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         if why:
             try:
                 d = deep_pass(llm, q, dep, names.get(dep, dep), ws, res, meta, search_fn,
-                              [x for x in deep if by_id[x]["department"] == dep], index, answer_cache, why, t_dep)
+                              [x for x in deep if by_id[x]["department"] == dep], index, answer_cache, why, t_dep, consider)
             except Exception as e:
                 d, meta["deep_error"] = None, str(e)[:120]
             if d:
