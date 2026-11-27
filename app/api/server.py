@@ -445,8 +445,15 @@ def make_handler(app):
                 if self.path == "/api/qa/poll":
                     return self._json(200, {"events": app.poll_mail()})
                 if self.path == "/api/qa/approve":        # эксперт подтверждает/правит карточку знания
-                    app.store.approve(b["practice_id"], b.get("who", "служба качества"), b.get("question"), b.get("answer"), b.get("applies_to"))
+                    app.store.approve(b["practice_id"], b.get("who", "служба качества"), b.get("question"), b.get("answer"), b.get("applies_to"),
+                                      b.get("destination"))
                     app.rebuild()
+                    return self._json(200, {"ok": True})
+                if self.path == "/api/qa/destination":    # куда ответ СК: база ответов (faq) или предложение в регламент
+                    try:
+                        app.store.set_destination(b["practice_id"], b.get("destination"))
+                    except ValueError as e:
+                        return self._json(400, {"error": str(e)})
                     return self._json(200, {"ok": True})
                 if self.path == "/api/conflicts/decide":   # служба качества: «Подтвердить» / «Не противоречие» / «Вернуть»
                     if b.get("decision") not in ("confirm", "reject", "reopen"):

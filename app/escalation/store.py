@@ -28,6 +28,10 @@ class Store:
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("pragma table_info(practices)")}
+        if "destination" not in cols:                # практика заказчика 27.11: ответ СК — в базу ответов или в регламент
+            self.db.execute("alter table practices add column destination text default 'faq'")
+            self.db.commit()
 
     def new_case(self, employee, question, departments, dialogue, fragments, reason):
         cid = "C" + uuid.uuid4().hex[:8].upper()
@@ -67,13 +71,22 @@ class Store:
 
     def publish(self, cid, expert, question, answer, applies_to, clauses, outcome, status="published"):
         pid = "P" + uuid.uuid4().hex[:8].upper()
-        self.db.execute("insert into practices values(?,?,?,?,?,?,?,?,?,?,?,?)",
+        self.db.execute("insert into practices(practice_id, case_id, created, expert, question, answer, applies_to, clauses, "
+                        "outcome, status, revoked_by, revoked_at, destination) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (pid, cid, time.time(), expert, question, answer, json.dumps(applies_to),
-                         json.dumps(clauses, ensure_ascii=False), outcome, status, None, None))
+                         json.dumps(clauses, ensure_ascii=False), outcome, status, None, None, "faq"))
         self.db.commit()
         return pid
 
-    def approve(self, pid, who, question=None, answer=None, applies_to=None):
+    def set_destination(self, pid, destination):
+        """«faq» — остаётся ответом на частый вопрос в базе знаний; «regulation» — предложено внести в регламент
+        (карточка действует, пока регламент не изменён). Практика заказчика 27.11."""
+        if destination not in ("faq", "regulation"):
+            raise ValueError("destination: faq | regulation")
+        self.db.execute("update practices set destination=? where practice_id=?", (destination, pid))
+        self.db.commit()
+
+    def approve(self, pid, who, question=None, answer=None, applies_to=None, destination=None):
         row = self.db.execute("select * from practices where practice_id=?", (pid,)).fetchone()
         if not row:
             raise KeyError(pid)
@@ -82,6 +95,8 @@ class Store:
                          json.dumps(applies_to) if applies_to else row["applies_to"], f"подтвердил: {who}", pid))
         self.db.execute("update cases set status='published', updated=? where case_id=?", (time.time(), row["case_id"]))
         self.db.commit()
+        if destination:
+            self.set_destination(pid, destination)
 
     def revoke(self, pid, who):
         self.db.execute("update practices set status='revoked', revoked_by=?, revoked_at=? where practice_id=?",

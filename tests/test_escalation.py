@@ -70,3 +70,17 @@ class EscalationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DestinationTest(unittest.TestCase):
+    def test_default_faq_and_switch_to_regulation(self):
+        from app.escalation.store import Store
+        s = Store(":memory:")
+        c = s.new_case("e@x", "q", ["TECH"], [], [], "r")
+        pid = s.publish(c["case_id"], "qa", "q", "a", ["TECH"], [], "practice", status="draft")
+        self.assertEqual(s.practices(only_published=False)[0]["destination"], "faq")
+        s.approve(pid, "qa", destination="regulation")
+        p = s.practices()[0]
+        self.assertEqual((p["status"], p["destination"]), ("published", "regulation"))
+        with self.assertRaises(ValueError):
+            s.set_destination(pid, "x")

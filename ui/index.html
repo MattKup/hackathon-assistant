@@ -236,6 +236,7 @@ nav button{padding:7px 10px}
 
 <section id="p-know" class="hide">
   <div class="ph"><div><h1>Знания</h1><p>Карточки из ответов службы качества. В ответах участвуют только подтверждённые</p></div></div>
+  <div class="card"><div class="hd"><b>Предложения в регламент</b><span class="sub" id="regCount"></span></div><div id="regList"></div></div>
   <div class="card"><div class="hd"><b>Карточки знаний</b><span class="sub" id="knowCount"></span></div><div id="knowList"></div></div>
 </section>
 
@@ -446,12 +447,26 @@ async function loadKnow(){
     ${x.status === "draft" ? `<div class="lbl">Вопрос — общий вид и формулировки</div><textarea data-q="${x.practice_id}">${esc(x.question)}</textarea>
       <div class="lbl">Ответ службы качества</div><textarea data-a="${x.practice_id}">${esc(x.answer)}</textarea>
       <div class="lbl">Для каких дирекций</div><div class="chips" style="margin-top:0">${["TECH","IB","DBRCT"].map(d => `<label class="chip"><input type="checkbox" data-d="${x.practice_id}" value="${d}" ${x.applies_to.includes(d) ? "checked" : ""}> ${DEP[d]}</label>`).join("")}</div>
+      <div class="lbl">Куда дальше</div><div class="chips" style="margin-top:0"><label class="chip"><input type="radio" name="dst-${x.practice_id}" value="faq" checked> Оставить в базе ответов (частые вопросы)</label><label class="chip"><input type="radio" name="dst-${x.practice_id}" value="regulation"> Предложить внести в регламент</label></div>
       <div class="foot"><button class="btn" data-ok="${x.practice_id}">Подтвердить и добавить в базу</button></div>`
     : `<pre>${esc(x.question)}</pre><div class="note">${esc(x.answer)}</div><div class="foot meta">Для: ${x.applies_to.map(d => DEP[d] || d).join(", ")}
-      ${x.status === "published" ? `<button class="btn ghost ml" data-rv="${x.practice_id}">Отозвать</button>` : ""}</div>`}</div>`; }).join("")
+      ${x.status === "published" ? `<span class="badge ${x.destination === "regulation" ? "a" : ""} ml">${x.destination === "regulation" ? "предложено в регламент" : "база ответов"}</span>
+        <button class="btn ghost" data-dst="${x.practice_id}" data-v="${x.destination === "regulation" ? "faq" : "regulation"}">${x.destination === "regulation" ? "Оставить в базе ответов" : "Предложить в регламент"}</button>
+        <button class="btn ghost" data-rv="${x.practice_id}">Отозвать</button>` : ""}</div>`}</div>`; }).join("")
     : `<div class="empty">Карточек пока нет — они появятся из ответов на обращения</div>`;
   $$("[data-ok]").forEach(b => b.onclick = async () => { const id = b.dataset.ok;
-    await api("/api/qa/approve", {practice_id:id, question:$(`[data-q="${id}"]`).value, answer:$(`[data-a="${id}"]`).value, applies_to:$$(`[data-d="${id}"]:checked`).map(i => i.value)}); loadKnow(); });
+    await api("/api/qa/approve", {practice_id:id, question:$(`[data-q="${id}"]`).value, answer:$(`[data-a="${id}"]`).value, applies_to:$$(`[data-d="${id}"]:checked`).map(i => i.value),
+      destination:($(`[name="dst-${id}"]:checked`)||{}).value || "faq"}); loadKnow(); });
+  $$("[data-dst]").forEach(b => b.onclick = async () => { await api("/api/qa/destination", {practice_id:b.dataset.dst, destination:b.dataset.v}); loadKnow(); });
+  // заказчик 27.11: ответ СК — в базу ответов или предложение в регламент; подтверждённое противоречие — задача изменить регламент
+  const reg = p.filter(x => x.status === "published" && x.destination === "regulation");
+  const cfr = await api("/api/conflicts?status=confirmed").catch(() => []);
+  const cfl = Array.isArray(cfr) ? cfr : (cfr.pairs || []);
+  $("#regCount").textContent = `${reg.length} из ответов службы качества · ${cfl.length} противоречий`;
+  $("#regList").innerHTML = (reg.length || cfl.length)
+    ? reg.map(x => `<div class="mailcard"><b>Дополнить регламент ответом службы качества</b> <span class="meta">карточка ${esc(x.practice_id)} · ${x.applies_to.map(d => DEP[d] || d).join(", ")}</span><pre>${esc(x.question)}</pre><div class="note">${esc(x.answer)}</div></div>`).join("")
+      + cfl.map(c => `<div class="mailcard"><b>Устранить противоречие</b> <span class="meta">${esc(DEP[c.department] || c.department || "")} · п. ${esc(c.clause_a)} ↔ п. ${esc(c.clause_b)}</span><div class="note">${esc(c.explanation || "")}</div></div>`).join("")
+    : `<div class="empty">Пока нет — сюда попадают ответы службы качества с пометкой «предложить в регламент» и подтверждённые противоречия</div>`;
   $$("[data-rv]").forEach(b => b.onclick = async () => { await api("/api/qa/revoke", {practice_id:b.dataset.rv}); loadKnow(); });
 }
 
