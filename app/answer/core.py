@@ -38,19 +38,32 @@ def _loose(s):
     return " ".join(re.findall(r"\w+", norm(s)))
 
 
+ELIDE_GAP = 300     # знаков между кусками цитаты с «...»: дальше — это уже склейка разных правил пункта, а не сокращение (v4/v2: верные — до 185)
+
+
 def _elided_ok(quote, text):
-    """Цитата, сокращённая многоточием: каждый кусок (≥ 3 слов) есть в тексте пункта дословно и в том же порядке."""
+    """Цитата, сокращённая многоточием: каждый кусок (≥ 3 слов) есть в тексте пункта дословно, в том же порядке
+    и не дальше ELIDE_GAP знаков от предыдущего (окна до 2 400 знаков: без предела из двух дальних фраз собирается
+    правило, которого в пункте нет)."""
     parts = [_loose(p) for p in re.split(r"\.{3}|…", quote)]
     parts = [p for p in parts if p]
     if len(parts) < 2 or any(len(p.split()) < 3 for p in parts):
         return False
-    t, pos = _loose(text), 0
-    for p in parts:
-        i = t.find(p, pos)
-        if i < 0:
-            return False
-        pos = i + len(p)
-    return True
+    t = " " + _loose(text) + " "
+    parts = [" " + p + " " for p in parts]          # по границам слов: «5 дней» не внутри «15 дней»
+    start = t.find(parts[0])
+    while start >= 0:
+        pos, ok = start + len(parts[0]) - 1, True
+        for p in parts[1:]:
+            i = t.find(p, pos)
+            if i < 0 or i - pos > ELIDE_GAP:
+                ok = False
+                break
+            pos = i + len(p) - 1
+        if ok:
+            return True
+        start = t.find(parts[0], start + 1)
+    return False
 
 
 def build_user(question, windows, dept_label, terms=""):
@@ -256,14 +269,16 @@ def check(raw, windows, question=""):
                 fixed = repair_quote(st["quote"], w["text"])
                 if fixed:
                     st = {**st, "quote": fixed, "quote_repaired": True}
-            if st.get("quote") and norm(st["quote"]) not in norm(w["text"]) and len(_loose(st["quote"]).split()) >= 4 \
-                    and _loose(st["quote"]) in _loose(w["text"]):
-                st = {**st, "quote_loose": True}     # те же слова подряд, без маркеров списка и знаков (Fable 27.11: v4_052, 099)
-            elif st.get("quote") and norm(st["quote"]) not in norm(w["text"]) and _elided_ok(st["quote"], w["text"]):
-                st = {**st, "quote_elided": True}    # цитата с «...»: каждый кусок дословно и по порядку (v4: 7 из 10 отказов)
-            elif not st.get("quote") or norm(st["quote"]) not in norm(w["text"]):
+            verbatim = bool(st.get("quote")) and norm(st["quote"]) in norm(w["text"])
+            if st.get("quote") and not verbatim:
+                lq = _loose(st["quote"])
+                if len(lq.split()) >= 4 and f" {lq} " in f" {_loose(w['text'])} ":
+                    st, verbatim = {**st, "quote_loose": True}, True     # те же слова подряд, без маркеров списка и знаков (Fable 27.11: v4_052, 099)
+                elif _elided_ok(st["quote"], w["text"]):
+                    st, verbatim = {**st, "quote_elided": True}, True    # цитата с «...»: каждый кусок дословно и по порядку (v4: 7 из 10 отказов)
+            if not verbatim:
                 reason = "quote_not_verbatim"
-            else:
+            else:       # числа, роли и добавки из вопроса проверяются и для цитат без маркеров / с «...» (раньше эти шаги проверки обходили)
                 nums_step = set(NUM.findall(st.get("text", "") + " " + st.get("deadline", "")))
                 if nums_step - set(NUM.findall(w["text"])):
                     reason = "number_not_in_source"

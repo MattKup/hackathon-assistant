@@ -58,3 +58,28 @@ class ElidedQuoteTest(unittest.TestCase):
         self.assertTrue(_elided_ok("Архитектор фиксирует новые сроки выдачи... Архитектор закрывает заявку", t))
         self.assertFalse(_elided_ok("Архитектор закрывает заявку... Архитектор фиксирует новые сроки", t))   # порядок
         self.assertFalse(_elided_ok("Архитектор фиксирует новые сроки... SS подписывает договор", t))
+
+    def test_elided_gap_and_word_boundary(self):
+        from app.answer.core import _elided_ok
+        far = "РП вправе начать работы после подписания договора. " + "Прочие условия проекта описаны отдельно. " * 12 + \
+              "Запрещено привлекать подрядчика без согласования сметы с директором."
+        # два куска из дальних фраз одного окна складываются в правило, которого в пункте нет
+        self.assertFalse(_elided_ok("РП вправе начать работы... без согласования сметы с директором", far))
+        self.assertTrue(_elided_ok("РП вправе начать работы... после подписания договора", far))
+        self.assertFalse(_elided_ok("в течение 5 дней... после подписания договора", "Срок: в течение 15 дней с даты и после подписания договора."))
+
+    def test_loose_and_elided_quotes_still_checked(self):
+        """Цитата без маркеров списка или с «...» — не повод пропускать проверки чисел и ролей (Fable 27.11, Г17-ревью)."""
+        from app.answer.core import check
+        w = [{"window_id": "a", "doc_id": "d", "department": "TECH", "department_name": "ТД", "doc_title": "t", "section_title": "s",
+              "path": "p", "kind": "clause", "clause": "2.5",
+              "text": "2.5. Для привлечения TPS SS обязан:\n• приложить квалификационную анкету;\n• приложить ТЗ заказчика. "
+                      "Заявка рассматривается в течение 2 рабочих дней."}]
+        for quote in ("SS обязан приложить квалификационную анкету",                                    # без маркера списка
+                      "SS обязан: • приложить квалификационную анкету... Заявка рассматривается в течение 2 рабочих дней"):
+            r = check({"verdict": "answer", "summary": "Нужно приложить квалификационную анкету",
+                       "steps": [{"text": "Приложить квалификационную анкету в течение 5 дней", "who": "SS", "deadline": "5 дней",
+                                  "ref": "w1", "quote": quote}]}, w)
+            self.assertEqual(len(r["steps"]), 1, quote)
+            self.assertEqual(r["steps"][0].get("replaced"), "number_not_in_source", quote)       # выдуманный срок не показан
+            self.assertNotIn("5 дней", r["steps"][0]["text"] + r["steps"][0]["deadline"], quote)
