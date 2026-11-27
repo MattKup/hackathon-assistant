@@ -106,6 +106,8 @@ class Store:
                         (question or row["question"], answer or row["answer"],
                          json.dumps(applies_to) if applies_to else row["applies_to"], f"подтвердил: {who}", pid))
         self.db.execute("update cases set status='published', updated=? where case_id=?", (time.time(), row["case_id"]))
+        if row["case_id"]:                         # повторные черновики того же обращения больше не нужны
+            self.db.execute("delete from practices where case_id=? and status='draft' and practice_id<>?", (row["case_id"], pid))
         self.db.commit()
         if destination:
             self.set_destination(pid, destination)

@@ -450,10 +450,14 @@ class App:
                 pass                              # сигнал — дополнительный; сбой не мешает обращению
         threading.Thread(target=work, daemon=True).start()
 
+    _poll_lock = threading.Lock()
+
     def poll_mail(self):
-        ev = process_replies(self.store, self.mailpit, self.llm)
-        if any(e["event"] == "published" for e in ev):
-            self.rebuild()
+        # фоновый опрос почты и опрос после «Ответить» шли одновременно и разбирали одно письмо дважды → две карточки (28.11)
+        with self._poll_lock:
+            ev = process_replies(self.store, self.mailpit, self.llm)
+            if any(e["event"] == "published" for e in ev):
+                self.rebuild()
         return ev
 
 
