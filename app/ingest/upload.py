@@ -19,9 +19,10 @@ from app.parsers.docx_simple import Para, parse as parse_docx
 SCHEMA = """create table if not exists uploads(
   doc_id text primary key, created real, file_name text, department text, stage text, status text,
   parser text, pages integer, ocr_pages integer, blocks integer, windows integer, chars integer, error text, job_id text)"""
-EXT_OK = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".html", ".htm", ".txt", ".md",
-          ".doc", ".rtf"}          # DOC/RTF — через doc-intel (ODT doc-intel на стенде не разобрал, 27.11); TXT/MD — разбор здесь
-FORMATS = "DOCX, DOC, RTF, PDF, HTML, TXT, MD, PNG, JPEG, TIFF"
+# Форматы платформы doc-intel (проверены в её ядре); DOCX, HTML, TXT, MD — разбор здесь, остальное — doc-intel
+EXT_OK = {".docx", ".doc", ".rtf", ".odt", ".pdf", ".xlsx", ".xls", ".xlsm", ".csv", ".ods", ".pptx", ".ppt", ".odp",
+          ".html", ".htm", ".txt", ".md", ".eml", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+FORMATS = "DOCX, DOC, RTF, ODT, PDF, XLSX, XLS, CSV, ODS, PPTX, PPT, ODP, HTML, TXT, MD, EML, PNG, JPEG, TIFF"
 
 
 def parse_text(text):

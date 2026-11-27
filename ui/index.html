@@ -191,6 +191,7 @@ header.tight2 .logo .t,header.tight2 .logo .s{display:none}
 @keyframes fl{from{box-shadow:inset 0 0 0 2px var(--brand)}to{box-shadow:inset 0 0 0 2px transparent}}
 .linkbtn{border:0;background:none;color:var(--brand);cursor:pointer;padding:0;font:inherit}
 .linkbtn:hover{text-decoration:underline}
+.kpis.sm .v{font-size:19px;white-space:nowrap}.kpis.sm{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
 @media (max-width:1000px){.upgrid{grid-template-columns:1fr}.upgrid .newdep{grid-column:auto}}
 </style>
 </head>
@@ -241,12 +242,20 @@ header.tight2 .logo .t,header.tight2 .logo .s{display:none}
 <section id="p-docs" class="hide">
   <div class="ph"><div><h1>Документы</h1><p>Реестр регламентов, по которым отвечает помощник</p></div></div>
   <div class="kpis" id="docKpis"></div>
+  <div class="card" style="margin-bottom:16px"><div class="hd"><b>Распознавание и разбор — платформа doc-intel</b><span class="sub">замеры платформы на длинных деловых документах</span></div>
+    <div class="bd"><div class="kpis sm" style="margin:0">
+      <div class="card kpi"><div class="l">Точность распознавания сканов</div><div class="v">99,2–99,4 %</div><div class="n">символов; числа, даты и номера — без ошибок</div></div>
+      <div class="card kpi"><div class="l">Форматов</div><div class="v">20+</div><div class="n">Word, PDF и сканы, Excel, PowerPoint, OpenDocument, RTF, HTML, EML, фото</div></div>
+      <div class="card kpi"><div class="l">Скорость</div><div class="v">до 2,3 стр/с</div><div class="n">640 страниц сканов в час на одной RTX 3090</div></div>
+      <div class="card kpi"><div class="l">Стоимость распознавания</div><div class="v">≈ 6 ₽</div><div class="n">электричество на 1 000 страниц</div></div>
+      <div class="card kpi"><div class="l">Модель распознавания</div><div class="v">LightOnOCR-2-1B</div><div class="n">выбрана из 20+ открытых моделей с русским языком</div></div>
+    </div></div></div>
   <div class="card qa hide" style="margin-bottom:16px">
-    <div class="hd"><b>Загрузить регламент</b><span class="sub">DOCX, HTML, TXT разбираются сразу; PDF, DOC, RTF, сканы и фото — распознаются doc-intel на этом сервере</span></div>
+    <div class="hd"><b>Загрузить регламент</b><span class="sub">DOCX, HTML, TXT разбираются сразу; остальные форматы, сканы и фото — распознаются doc-intel на этом сервере</span></div>
     <div class="bd"><form id="upForm" class="drop" novalidate>
-      <input type="file" name="file" id="upFile" accept=".docx,.doc,.rtf,.pdf,.html,.htm,.txt,.md,.png,.jpg,.jpeg,.tif,.tiff">
+      <input type="file" name="file" id="upFile" accept=".docx,.doc,.rtf,.odt,.pdf,.xlsx,.xls,.xlsm,.csv,.ods,.pptx,.ppt,.odp,.html,.htm,.txt,.md,.eml,.png,.jpg,.jpeg,.tif,.tiff">
       <div class="fname" id="fname">Перетащите файл сюда</div>
-      <div class="meta">DOCX, DOC, RTF, PDF, HTML, TXT, MD, PNG, JPEG, TIFF · до 50 МБ</div>
+      <div class="meta">Word, PDF и сканы, Excel, PowerPoint, OpenDocument, RTF, HTML, TXT, Markdown, письма EML, фото · до 50 МБ</div>
       <div class="upgrid">
         <label class="pick" for="upFile">📎 Выбрать файл</label>
         <div class="fld">Подразделение<select class="pill" name="department" id="upDept"></select></div>
