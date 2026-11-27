@@ -54,7 +54,7 @@ main{padding:26px 0 40px}
 .kpi .v{font-size:26px;font-weight:700;margin:2px 0;letter-spacing:-.01em}
 .kpi .n{font-size:12px;color:var(--muted)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.ask{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
+.ask{display:grid;grid-template-columns:230px minmax(0,1fr) 360px;gap:16px;align-items:start}
 .dialog{display:flex;flex-direction:column;min-height:calc(100vh - 210px)}
 .msgs{flex:1;padding:18px;overflow:auto}
 .m{display:flex;gap:10px;margin:0 0 18px}
@@ -193,6 +193,36 @@ header.tight2 .logo .t,header.tight2 .logo .s{display:none}
 .linkbtn:hover{text-decoration:underline}
 .kpis.sm .v{font-size:19px;white-space:nowrap}.kpis.sm{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
 @media (max-width:1000px){.upgrid{grid-template-columns:1fr}.upgrid .newdep{grid-column:auto}}
+/* список диалогов, как в чатах (владелец 27.11) */
+.chats{position:sticky;top:84px;display:flex;flex-direction:column;max-height:calc(100vh - 110px)}
+.chats .hd{justify-content:space-between}
+.chats .list{overflow:auto;padding:6px}
+.chats .it{display:block;width:100%;text-align:left;border:0;background:none;border-radius:9px;padding:9px 10px;cursor:pointer;margin:0 0 2px}
+.chats .it:hover{background:var(--soft)}
+.chats .it.on{background:var(--soft);box-shadow:inset 3px 0 0 var(--brand)}
+.chats .it .t{display:block;font-size:13.5px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chats .it .s{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+.chats.busy .it{cursor:progress}
+.newchat{border:1px solid var(--line2);background:var(--card);border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12.5px;white-space:nowrap}
+.chats .hd{padding:12px 12px 12px 16px}
+.newchat:hover{border-color:var(--ink)}
+/* реестр документов: строка открывает документ */
+tr.rowlink{cursor:pointer}
+tr.rowlink:hover td{background:var(--hover)}
+tr.rowlink .doclink{color:var(--ink);font-weight:600}
+tr.rowlink:hover .doclink{text-decoration:underline;text-underline-offset:3px}
+tr.rowlink .chev{color:var(--faint);font-size:18px;line-height:1}
+tr.rowlink:hover .chev{color:var(--ink)}
+/* настройки */
+.setcard{margin-bottom:16px}
+.setcard .bd p.meta{margin:0 0 12px}
+.setrow{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end}
+.setrow .fld{width:180px}
+.casebar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 2px;padding:8px 12px;border-radius:10px;background:var(--soft);font-size:13px}
+.casebar .linkbtn{font-weight:600}
+.foot{flex-wrap:wrap}.foot>span{white-space:nowrap}
+@media (max-width:1300px){.ask{grid-template-columns:200px minmax(0,1fr) 320px}}
+@media (max-width:1100px){.ask{grid-template-columns:minmax(0,1fr) 320px}.chats{grid-column:1/-1;position:static;max-height:none}.chats .list{display:flex;gap:6px;overflow-x:auto}.chats .it{width:auto;min-width:180px;max-width:240px}}
 </style>
 </head>
 <body>
@@ -219,8 +249,9 @@ header.tight2 .logo .t,header.tight2 .logo .s{display:none}
 <section id="p-ask">
   <div class="ph"><div><h1>Спросить</h1><p>Ответ по регламентам проектной деятельности — с точными пунктами</p></div></div>
   <div class="ask">
+    <div class="card chats" id="chats"><div class="hd"><b>Диалоги</b><button class="newchat" id="newChat2" title="Начать новый диалог — прежний останется в списке">＋ Новый диалог</button></div><div class="list" id="chatList"></div></div>
     <div class="card dialog">
-      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="opt ml" title="Не спрашивать дирекцию: сразу ответы по всем дирекциям, где это описано"><input type="checkbox" id="noClarify">Сразу по всем дирекциям</label><label class="opt" title="Экспериментальная опция: если рядом с процитированным пунктом есть пункт с исключением или особым условием по той же теме, помощник покажет его дословно — «проверьте также п. X». Подсказку строит код, без модели. На наших 4 регламентах чаще даёт лишние пункты, чем нужные; польза ожидается на большой базе и с другой моделью."><input type="checkbox" id="hints">Связанные пункты</label><button class="btn ghost" id="newChat">Новый диалог</button></div>
+      <div class="hd"><b>Диалог</b><span class="sub" id="ctx"></span><label class="opt ml" title="Не спрашивать дирекцию: сразу ответы по всем дирекциям, где это описано"><input type="checkbox" id="noClarify">Сразу по всем дирекциям</label><label class="opt" title="Экспериментальная опция: если рядом с процитированным пунктом есть пункт с исключением или особым условием по той же теме, помощник покажет его дословно — «проверьте также п. X». Подсказку строит код, без модели. На наших 4 регламентах чаще даёт лишние пункты, чем нужные; польза ожидается на большой базе и с другой моделью."><input type="checkbox" id="hints">Связанные пункты</label></div>
       <div class="msgs" id="msgs">
         <div class="empty" id="empty">Спросите о пресейле, расчёте, ТКП, договоре, старте или ведении проекта.<br>Если ответа нет в регламентах — передам вопрос в службу качества.
           <div class="examples">
@@ -281,20 +312,20 @@ header.tight2 .logo .t,header.tight2 .logo .s{display:none}
 
 <section id="p-know" class="hide">
   <div class="ph"><div><h1>Знания</h1><p>Карточки из ответов службы качества. В ответах участвуют только подтверждённые</p></div></div>
-  <div class="card"><div class="hd"><b>Реестр изменений регламента</b><span class="sub" id="regCount"></span></div><div id="regList"></div></div>
+  <div class="card" style="margin-bottom:16px"><div class="hd"><b>Реестр изменений регламента</b><span class="sub" id="regCount"></span></div><div id="regList"></div></div>
   <div class="card"><div class="hd"><b>Карточки знаний</b><span class="sub" id="knowCount"></span></div><div id="knowList"></div></div>
 </section>
 
 <section id="p-settings" class="hide">
   <div class="ph"><div><h1>Настройки службы качества</h1><p>Меняются здесь и действуют сразу, без перезапуска и без программиста.</p></div></div>
-  <div class="card"><div class="hd"><b>Темы, которые разбирает служба качества</b><span class="sub">вне регламентов</span></div>
-    <p class="meta" style="margin:0 0 8px">Вопрос сотрудника на такую тему помощник передаёт в службу качества, а не отвечает «вне регламентов». По одной теме в строке. Пустой список — общее правило: любой рабочий вопрос без ответа уходит в службу качества.</p>
-    <textarea id="setTopics" rows="7"></textarea></div>
-  <div class="card"><div class="hd"><b>Мониторинг повторов</b></div>
-    <p class="meta" style="margin:0 0 8px">Если один и тот же вопрос (другими словами тоже) задали столько раз за период, служба качества получает сигнал письмом и в аналитике.</p>
-    <div class="chips" style="margin-top:0"><label class="chip">Период, дней <input id="setPeriod" type="number" min="1" max="90" style="width:64px"></label>
-      <label class="chip">Порог, раз <input id="setThreshold" type="number" min="2" max="50" style="width:64px"></label></div>
-    <div class="foot"><button class="btn" id="setSave">Сохранить</button><span class="meta ml" id="setMsg"></span></div></div>
+  <div class="card setcard"><div class="hd"><b>Темы, которые разбирает служба качества</b><span class="sub">вне регламентов</span></div>
+    <div class="bd"><p class="meta">Вопрос сотрудника на такую тему помощник передаёт в службу качества, а не отвечает «вне регламентов». По одной теме в строке. Пустой список — общее правило: любой рабочий вопрос без ответа уходит в службу качества.</p>
+    <textarea id="setTopics" rows="7"></textarea></div></div>
+  <div class="card setcard"><div class="hd"><b>Мониторинг повторов</b></div>
+    <div class="bd"><p class="meta">Если один и тот же вопрос (другими словами тоже) задали столько раз за период, служба качества получает сигнал письмом и в аналитике.</p>
+    <div class="setrow"><div class="fld">Период, дней<input id="setPeriod" type="number" min="1" max="90"></div>
+      <div class="fld">Порог, раз<input id="setThreshold" type="number" min="2" max="50"></div></div></div></div>
+  <div class="foot"><button class="btn" id="setSave">Сохранить</button><span class="meta" id="setMsg"></span></div>
 </section>
 <section id="p-conf" class="hide">
   <div class="ph"><div><h1>Противоречия</h1><p>Пары пунктов, которые расходятся между собой. Кандидатов находит анализатор (ночью) или разбор ответов; в ответах помощника участвуют только подтверждённые службой качества</p></div></div>
@@ -368,21 +399,41 @@ bindExamples();
 $("#askForm").onsubmit = e => { e.preventDefault(); const v = $("#q").value.trim(); if (v) { $("#q").value = ""; ask(v); } };
 const EMPTY = $("#msgs").innerHTML;   // приветствие и примеры вопросов — возвращаются в новом диалоге
 function bindExamples(){ $$(".examples button").forEach(b => b.onclick = () => ask(b.textContent)); }
-$("#newChat").onclick = async () => { if (session) await api("/api/reset", {session}); session = null; notes = []; $("#msgs").innerHTML = EMPTY; bindExamples(); $("#ctx").textContent = "";
-  $("#srcBody").innerHTML = `<div class="meta">Нажмите на сноску в ответе — здесь откроется пункт регламента.</div>`; };
+// диалоги, как в чатах: «Новый диалог» не стирает прежний — к нему можно вернуться из списка слева
+const CHKEY = "assistant-chats-v1";
+let chats = [], cur = null, busy = false;
+try { chats = JSON.parse(localStorage.getItem(CHKEY) || "[]"); } catch (e) { chats = []; }
+const persist = () => { try { localStorage.setItem(CHKEY, JSON.stringify(chats.slice(0, 30))); } catch (e) {} };
+function saveCur(){ if (!cur) return; cur.html = $("#msgs").innerHTML; cur.notes = notes; cur.session = session; cur.ctx = $("#ctx").textContent; persist(); }
+function openChat(c){ cur = c; session = c.session; notes = c.notes; $("#msgs").innerHTML = c.html; $("#ctx").textContent = c.ctx || "";
+  bindExamples(); bind();
+  $("#srcBody").innerHTML = `<div class="meta">Нажмите на сноску в ответе — здесь откроется пункт регламента.</div>`; drawChats(); }
+function newChat(){ if (busy) return; saveCur();
+  if (cur && cur.html === EMPTY) return openChat(cur);
+  const c = {id: String(Date.now()), title: "", html: EMPTY, notes: [], session: null, ctx: "", t: Date.now()};
+  chats.unshift(c); openChat(c); persist(); $("#q").focus(); }
+function drawChats(){
+  const fmt = t => { const d = new Date(t), n = new Date(); return d.toDateString() === n.toDateString() ? d.toLocaleTimeString("ru", {hour:"2-digit", minute:"2-digit"}) : d.toLocaleDateString("ru", {day:"numeric", month:"short"}); };
+  $("#chatList").innerHTML = chats.map(c => `<button class="it${c === cur ? " on" : ""}" data-chat="${c.id}"><span class="t">${esc(c.title || "Новый диалог")}</span><span class="s">${fmt(c.t)}${c.ctx ? " " + esc(c.ctx) : ""}</span></button>`).join("");
+  $$("[data-chat]").forEach(b => b.onclick = () => { if (busy || b.dataset.chat === cur?.id) return; saveCur(); openChat(chats.find(c => c.id === b.dataset.chat)); });
+  $("#chats").classList.toggle("busy", busy); }
+$("#newChat2").onclick = newChat;
 
 function add(html, who){ $("#empty")?.remove(); const d = document.createElement("div"); d.className = "m " + who;
   d.innerHTML = `<div class="av">${who === "bot" ? "П" : "Я"}</div><div class="body">${html}</div>`; $("#msgs").appendChild(d); d.scrollIntoView({block:"end", behavior:"smooth"}); return d; }
 
 async function ask(question, choice, choiceLabel){
+  if (!cur) newChat();
+  if (!cur.title && question) cur.title = question.slice(0, 80);
+  cur.t = Date.now(); chats = [cur, ...chats.filter(c => c !== cur)]; busy = true; drawChats();
   add(`<span class="q">${esc(choiceLabel || question)}</span>`, "user");
   const w = add(`<span class="meta"><span class="spin"></span> Разбираю вопрос и ищу в регламентах…</span>`, "bot");
   const t0 = performance.now();
   const r = await api("/api/ask", {session, question, choice, employee, no_clarify: !!$("#noClarify")?.checked, hints: !!$("#hints")?.checked}).catch(e => ({error:String(e)}));
   r.client_seconds = Math.round((performance.now() - t0) / 100) / 10;   // с сетью — для сравнения со временем на стенде
-  w.remove();
-  if (r.error) return add(`<div class="caveat">Ошибка: ${esc(r.error)}</div>`, "bot");
-  session = r.session; add(render(r), "bot"); bind();
+  w.remove(); busy = false;
+  if (r.error) { add(`<div class="caveat">Ошибка: ${esc(r.error)}</div>`, "bot"); saveCur(); return drawChats(); }
+  session = r.session; add(render(r), "bot"); bind(); saveCur(); drawChats();
 }
 
 // плашка «вопрос передан»: сотрудник видит, что вопрос ушёл в службу качества и куда придёт ответ
@@ -482,12 +533,12 @@ async function loadDocs(){
 function drawDocs(){
   const f = $("#docSearch").value.toLowerCase(), rows = docs.filter(d => d.display_title.toLowerCase().includes(f));
   $("#docCount").textContent = `${rows.length} в реестре`;
-  $("#docRows").innerHTML = rows.map(d => `<tr><td><div class="ttl"><span>📄</span><div>${esc(d.display_title)}${d.pages ? `<div class="meta">${d.pages} стр.${d.ocr_pages ? " · распознано " + d.ocr_pages : ""}</div>` : ""}</div></div></td>
+  $("#docRows").innerHTML = rows.map(d => `<tr${d.windows ? ` class="rowlink" data-open="${d.doc_id}" title="Открыть документ целиком"` : ""}><td><div class="ttl"><span>📄</span><div><span class="doclink">${esc(d.display_title)}</span>${d.pages ? `<div class="meta">${d.pages} стр.${d.ocr_pages ? " · распознано " + d.ocr_pages : ""}</div>` : ""}</div></div></td>
     <td>${esc(DEP[d.department] || d.department_name || d.department || "")}</td><td>${STAGE[d.stage] || ""}</td><td class="meta">${esc(d.source)}</td><td>${d.windows ?? "—"}</td>
     <td>${d.status === "действует" ? `<span class="badge g">Действует</span>` : d.status.startsWith("ошибка") ? `<span class="badge r">${esc(d.status)}</span>` : `<span class="badge a"><span class="spin"></span> ${esc(d.status)}</span>`}</td>
-    <td style="white-space:nowrap">${d.windows ? `<button class="btn ghost" data-open="${d.doc_id}">Открыть</button>` : ""}${qa && d.source === "загружен" ? ` <button class="btn ghost" data-rm="${d.doc_id}">Убрать</button>` : ""}</td></tr>`).join("");
-  $$("[data-open]").forEach(b => b.onclick = () => openDoc(b.dataset.open));
-  $$("[data-rm]").forEach(b => b.onclick = async () => { await api("/api/docs/remove", {doc_id:b.dataset.rm}); loadDocs(); });
+    <td style="white-space:nowrap;text-align:right;vertical-align:middle">${qa && d.source === "загружен" ? `<button class="btn ghost" data-rm="${d.doc_id}">Убрать</button> ` : ""}${d.windows ? `<span class="chev">›</span>` : ""}</td></tr>`).join("");
+  $$("tr[data-open]").forEach(r => r.onclick = () => openDoc(r.dataset.open));
+  $$("[data-rm]").forEach(b => b.onclick = async e => { e.stopPropagation(); await api("/api/docs/remove", {doc_id:b.dataset.rm}); loadDocs(); });
 }
 $("#docSearch").oninput = drawDocs;
 const drop = $("#upForm");
@@ -512,7 +563,7 @@ async function loadCases(){
     + kpi("Закрыто знанием", c.filter(x => x.status === "published").length, "ответ стал карточкой");
   $("#caseList").innerHTML = c.length ? c.map(x => { const [st, cl] = CST[x.status] || [x.status, ""], fr = JSON.parse(x.fragments), pr = byCase[x.case_id]; return `<div class="mailcard" id="case-${esc(x.case_id)}">
     <div style="display:flex;gap:10px;align-items:center"><b>${esc(x.question)}</b><span class="badge ${cl} ml">${st}</span></div>
-    ${pr ? `<div class="meta">Карточка знания: <button class="linkbtn" data-goknow="${esc(pr.practice_id)}">${esc(pr.practice_id)} — ${pr.status === "draft" ? "подтвердить" : pr.status === "published" ? "в базе знаний" : "отозвана"} →</button></div>` : ""}
+    ${pr ? `<div class="casebar">📘 Карточка знания <button class="linkbtn" data-goknow="${esc(pr.practice_id)}">${esc(pr.practice_id)}</button><span class="meta">${pr.status === "draft" ? "ждёт подтверждения" : pr.status === "published" ? "в базе знаний" : "отозвана"}</span><button class="linkbtn ml" data-goknow="${esc(pr.practice_id)}">${pr.status === "draft" ? "Подтвердить карточку →" : "Открыть карточку →"}</button></div>` : ""}
     <div class="meta">От: помощник · Кому: служба качества · Копия: ${esc(x.employee || "—")} · ${new Date(x.created*1000).toLocaleString("ru")}</div>
     <pre>Дирекция: ${esc(JSON.parse(x.departments).map(d => DEP[d] || d).join(", ") || "не определена")}\nПочему помощник не ответил: ${esc(x.reason)}${fr.length ? "\nБлизкие пункты: " + fr.slice(0,3).map(f => esc(f.doc) + " п. " + esc(f.clause)).join("; ") : ""}</pre>
     ${["sent","in_work"].includes(x.status) ? `<textarea data-c="${x.case_id}" placeholder="Ответ службы качества (уйдёт в тот же почтовый тред, сотрудник в копии)…"></textarea>
@@ -525,10 +576,12 @@ async function loadCases(){
 
 async function loadKnow(){
   const p = (await api("/api/practices")).slice().reverse();
+  const caseQ = {}; (await api("/api/cases").catch(() => [])).forEach(c => caseQ[c.case_id] = c.question);
   $("#knowCount").textContent = `${p.filter(x => x.status === "published").length} в базе · ${p.filter(x => x.status === "draft").length} ждут подтверждения`;
   const ST = {draft:["Ждёт подтверждения","a"], published:["В базе знаний","g"], revoked:["Отозвана",""]};
   $("#knowList").innerHTML = p.length ? p.map(x => { const [st, cl] = ST[x.status] || [x.status, ""]; return `<div class="mailcard" id="know-${esc(x.practice_id)}">
-    <div style="display:flex;gap:10px;align-items:center"><b>Карточка ${esc(x.practice_id)}</b><span class="meta">из ответа ${esc(x.expert)} · ${new Date(x.created*1000).toLocaleString("ru")}${x.case_id ? ` · <button class="linkbtn" data-gocase="${esc(x.case_id)}">обращение ${esc(x.case_id)} →</button>` : ""}</span><span class="badge ${cl} ml">${st}</span></div>
+    <div style="display:flex;gap:10px;align-items:center"><b>Карточка ${esc(x.practice_id)}</b><span class="meta">из ответа ${esc(x.expert)} · ${new Date(x.created*1000).toLocaleString("ru")}</span><span class="badge ${cl} ml">${st}</span></div>
+    ${x.case_id ? `<div class="casebar">✉️ Из обращения <button class="linkbtn" data-gocase="${esc(x.case_id)}">${esc(x.case_id)}</button>${caseQ[x.case_id] ? `<span class="meta">«${esc(caseQ[x.case_id])}»</span>` : ""}<button class="linkbtn ml" data-gocase="${esc(x.case_id)}">Открыть обращение →</button></div>` : ""}
     ${x.status === "draft" ? `<div class="lbl">Вопрос — общий вид и формулировки</div><textarea data-q="${x.practice_id}">${esc(x.question)}</textarea>
       <div class="lbl">Ответ службы качества</div><textarea data-a="${x.practice_id}">${esc(x.answer)}</textarea>
       <div class="lbl">Для каких дирекций</div><div class="chips" style="margin-top:0">${["TECH","IB","DBRCT"].map(d => `<label class="chip"><input type="checkbox" data-d="${x.practice_id}" value="${d}" ${x.applies_to.includes(d) ? "checked" : ""}> ${DEP[d]}</label>`).join("")}</div>
@@ -677,6 +730,7 @@ function jump(page, sel){ go(page); let n = 0;
   const t = setInterval(() => { const el = $(sel); if (el || ++n > 30) { clearInterval(t);
     if (el) { el.scrollIntoView({block:"center", behavior:"smooth"}); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 2500); } } }, 100); }
 
+if (chats.length) openChat(chats[0]); else newChat();
 setInterval(() => { if (qa) loadCount(); if (!$("#p-cases").classList.contains("hide")) loadCases(); }, 10000);
 </script>
 </body>

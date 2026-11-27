@@ -61,6 +61,32 @@ if cid:
     if draft:
         step("6a. эксперт подтверждает карточку", call("/api/qa/approve", {"practice_id": draft["practice_id"], "who": "эксперт службы качества"}))
     step("7. кейс 3: повторный вопрос другими словами", call("/api/ask", {"session": "s2", "question": "Как долго держим документы проекта, когда он уже в архиве?", "employee": "petrov@example.test"}))
+
+
+def extra_pair(n, sess, q, employee, answer, approve):
+    """Ещё пара «обращение → карточка знания» для демонстрации переходов (владелец 27.11)."""
+    r = step(f"7{n}. ещё обращение: {q[:60]}", call("/api/ask", {"session": sess, "question": q, "employee": employee}))
+    if not r.get("case"):
+        call("/api/escalate", {"session": sess})
+    case = None
+    for _ in range(30):
+        case = next((c for c in call("/api/cases") or [] if c.get("question") == q), None)
+        if case and case.get("mail_sent") is not None:
+            break
+        time.sleep(3)
+    if not case:
+        return
+    step(f"7{n}. эксперт отвечает", call("/api/qa/reply", {"case_id": case["case_id"], "text": answer}))
+    step(f"7{n}. бот разбирает почту → карточка", call("/api/qa/poll", {}))
+    card = next((x for x in call("/api/practices") or [] if x.get("case_id") == case["case_id"]), None)
+    if card and approve:
+        step(f"7{n}. эксперт подтверждает карточку", call("/api/qa/approve", {"practice_id": card["practice_id"], "who": "эксперт службы качества"}))
+
+
+extra_pair("b", "s2b", "Какое обучение должен пройти новый руководитель проекта до первого назначения?", "kuznetsova@example.test",
+           "Добрый день! Новый РП до первого назначения проходит внутренний курс по управлению проектами и стажируется на проекте опытного РП. Это общее правило для всех дирекций.", True)
+extra_pair("c", "s2c", "Какой процент неустойки мы сами ставим исполнителю за просрочку?", "smirnov@example.test",
+           "Добрый день! Размер неустойки для исполнителя согласуется с юридическим департаментом по каждому договору, единого процента нет.", False)
 r8 = step("8. кейс 2: вопрос без подразделения", call("/api/ask", {"session": "s3", "question": "За сколько заранее запускать заявку на расчёт?"}))
 opt = next((o["id"] for o in r8.get("options", []) if "ДБРЦТ" in o["label"]), None)
 if opt:
