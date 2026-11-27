@@ -268,6 +268,46 @@ def _neighbors(clause):
     return out
 
 
+EXC_RE = re.compile(r"исключени|за исключением|\bкроме\b|не распростран|не применя|допускается|вправе|при отсутствии|"
+                    r"в случае (?:нарушени|отказ|уклонени|непредоставлени|несоблюдени|отсутстви)|отклоня|не позднее|не допускается", re.I)
+
+
+def related_clauses(question, res, ws, index, limit=2):
+    """Г15 (владелец 27.11, реплика организатора: «заставить ИИ сказать, что у неё нет полного ответа»): кодом, без модели —
+    пункты того же документа рядом с процитированными или упомянутые в них, где есть исключение / особое условие / срок
+    по той же теме, но которых нет в ответе. Сотрудник видит «Проверьте также п. X» с дословной выдержкой.
+    Судья 27.11: главный тип ошибки — неполный ответ (исключение из соседнего пункта потеряно: v2_016/v2_050, f_001, f_005)."""
+    if not index or res.get("verdict") not in ("answer", "answer_with_caveat"):
+        return []
+    from app.answer.core import stems as _st
+    doc_of = {w["window_id"]: w.get("doc_id") for w in ws}
+    cited = {(doc_of.get(st.get("window_id")), str(st.get("clause"))) for st in res.get("steps", []) if st.get("clause")}
+    cited.discard((None, ""))
+    if not cited:
+        return []
+    texts = {(w.get("doc_id"), str(w.get("clause"))): w.get("text", "") for w in ws}
+    topic = _st(question + " " + (res.get("summary") or "") + " " + " ".join(texts.get(c, "") for c in cited))
+    cand = []
+    for d, c in sorted(cited, key=lambda x: x[1]):
+        for r in REF_RE.findall(texts.get((d, c), "") or (index.get((d, c)) or {}).get("text", "")):
+            cand.append((d, r, f"на него ссылается п. {c}"))
+        for n in _neighbors(c):
+            cand.append((d, n, f"рядом с п. {c}"))
+    out, seen = [], set(cited)
+    for d, c, why in cand:
+        w = index.get((d, c))
+        if not w or (d, c) in seen:
+            continue
+        seen.add((d, c))
+        t = w.get("text", "")
+        if not EXC_RE.search(t) or len(_st(t) & topic) < 3:
+            continue
+        out.append({"clause": c, "doc_title": w.get("doc_title") or "", "why": why, "quote": " ".join(t.split())[:260]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def needs_deep(res, support):
     if res["verdict"] == "answer_with_caveat" and (res.get("missing") or "").strip():
         return "в ответе не хватает: " + res["missing"].strip()[:120]
@@ -823,6 +863,10 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                     meta.update({k: v for k, v in d["meta"].items() if k in ("prompt_tokens", "completion_tokens")})
         meta["clauses_seen"] = [w["clause"] for w in ws]
         meta["context_chars"] = sum(len(w["text"]) for w in ws)
+        if "G15" not in OFF:
+            rel = related_clauses(question, res, ws, index)
+            if rel:
+                res = {**res, "related": rel}
         return {"doc_id": dep, "label": names.get(dep, dep), "result": res, "meta": meta, "windows": ws}
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
@@ -838,6 +882,9 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         tr.append(f"{r['label']}: {verdict}" + (f", {n} {plural(n, 'шаг', 'шага', 'шагов')} со ссылками на пункты" if n else "")
                   + (f"; {rej} {plural(rej, 'утверждение отброшено', 'утверждения отброшены', 'утверждений отброшено')} проверкой цитат" if rej else "; все цитаты сверены с текстом"))
         r["meta"]["trace_debug"] = f"пункты в контексте: {', '.join(r['meta'].get('clauses_seen', []))}"
+        if res.get("related"):
+            tr.append(f"{r['label']}: рядом есть пункты с исключением или особым условием — показываю «проверьте также п. "
+                      + ", ".join(x["clause"] for x in res["related"]) + "»")
     if fixed:
         return _finish(results)
 
