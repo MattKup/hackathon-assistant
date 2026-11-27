@@ -12,7 +12,7 @@ import re
 
 EXTERNAL = "EXTERNAL"
 EXTERNAL_NAME = "Внешние источники"
-SHOW_FOR = {"answer", "answer_with_caveat", "conflict", "escalate"}
+SHOW_FOR = {"answer", "answer_with_caveat", "conflict", "escalate", "out_of_scope"}
 
 
 def is_external(doc):

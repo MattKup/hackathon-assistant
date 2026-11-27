@@ -586,8 +586,18 @@ def route_for(question):
     q = question.lower()
     for r in cfg().get("routes") or []:
         if re.search(r["match"], q, re.I):
-            return {"to": r["to"], "why": r.get("why", "")}
-    return {"to": "ваш руководитель", "why": "вопрос не относится к регламентам проектной деятельности"}
+            return {"to": r.get("to", ""), "why": r.get("why", ""), "say": r.get("say", "")}
+    return {"to": "", "why": "вопрос не относится к регламентам проектной деятельности"}
+
+
+OOS_TEXT = ("Этот вопрос не про регламенты компании, поэтому ответить на него я не могу. "
+            "Я отвечаю на вопросы по регламентам: как вести пресейл и проект, кто за что отвечает и в какие сроки.")
+
+
+def oos_text(r):
+    """Человеческий текст отказа «вне регламентов»: своя фраза маршрута из настройки (say) или общая."""
+    say = (r or {}).get("say") or ""
+    return ("Этот вопрос не про регламенты компании. " + say) if say else OOS_TEXT
 
 
 def _docs_for(depts, stage, registry):
@@ -780,7 +790,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     if not intent and OUT_OF_SCOPE.search(question):
         tr.append("Вопрос не про регламенты — подсказываю, куда обратиться")
         r = route_for(question)
-        return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr)
+        return Turn("out_of_scope", oos_text(r), route=r, trace=tr)
     # исходная формулировка всегда в поиске: переписывание может увести в сторону (26.11: «заявка» → «РТЗ»)
     queries = list(dict.fromkeys([strip_departments(question, registry)] + [strip_departments(x, registry) for x in u["queries"]]))[:4]
     tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
@@ -879,7 +889,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         if (intent == "out_of_scope" or best < OOS_SUPPORT or "G1" in OFF) and not in_scope_llm(llm, question):
             tr.append("Ответа нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
             r = route_for(question)
-            return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits, answers=results)
+            return Turn("out_of_scope", oos_text(r), route=r, trace=tr, hits=hits, answers=results)
         tr.append("В найденных пунктах ответа нет — отправляю вопрос в службу качества")
         return Turn("escalate", "В регламентах прямого ответа нет. Я отправил вопрос в службу качества, вы в копии.",
                     route={"to": "служба качества", "email": True}, answers=results, trace=tr, hits=hits)
@@ -895,13 +905,13 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     if intent == "out_of_scope" and best < OOS_SUPPORT and ("G1" in OFF or not in_scope_llm(llm, question)):
         tr.append("Вопрос не про процессы компании, и сильной опоры в регламентах нет — подсказываю, куда обратиться")
         r = route_for(question)
-        return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
+        return Turn("out_of_scope", oos_text(r), route=r, trace=tr, hits=hits)
 
     if best < NO_SUPPORT:
         if not in_scope_llm(llm, question):
             tr.append("Подходящих пунктов нет, и вопрос не про процессы компании — подсказываю, куда обратиться")
             r = route_for(question)
-            return Turn("out_of_scope", f"Этот вопрос не касается базы регламентов. Обратитесь: {r['to']}.", route=r, trace=tr, hits=hits)
+            return Turn("out_of_scope", oos_text(r), route=r, trace=tr, hits=hits)
         tr.append("Подходящих пунктов в регламентах нет — отправляю вопрос в службу качества")
         return Turn("escalate", "В регламентах нет ответа на этот вопрос. Я отправил вопрос в службу качества, вы в копии — ответ придёт на почту.",
                     route={"to": "служба качества", "email": True}, trace=tr, hits=hits)

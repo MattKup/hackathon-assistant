@@ -491,7 +491,7 @@ function render(r){
   } else if (r.outcome === "escalate") {
     h += `<p class="lead">${esc(r.text)}</p>` + (r.case ? handed(r.case) : "");
   } else {
-    h += `<p class="lead">${esc(r.text)}</p>` + (r.route ? `<div class="note">Куда обратиться: ${esc(r.route.to)}</div>` : "");
+    h += `<p class="lead">${esc(r.text)}</p>` + (r.route && r.route.to && !["out_of_scope", "task_refusal"].includes(r.outcome) ? `<div class="note">Куда обратиться: ${esc(r.route.to)}</div>` : "");
     // Fable 27.11 / заказчик: «вне регламентов» не должен быть тупиком — сотрудник может сам передать вопрос в СК
     if (r.outcome === "out_of_scope") h += `<div class="chips"><button class="chip" data-escalate="1" data-reason="сотрудник просит разобрать вопрос, который помощник счёл вне регламентов">Передать в службу качества</button></div>`;
   }
