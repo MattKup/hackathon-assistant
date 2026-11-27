@@ -222,6 +222,7 @@ tr.rowlink:hover .chev{color:var(--ink)}
 .casebar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 2px;padding:8px 12px;border-radius:10px;background:var(--soft);font-size:13px}
 .casebar .linkbtn{font-weight:600}
 .foot{flex-wrap:wrap}.foot>span{white-space:nowrap}
+#p-settings > .foot{padding-left:19px;margin:0 0 24px}   /* «Сохранить» на одной линии с кнопками внутри карточек */
 @media (max-width:1300px){.ask{grid-template-columns:200px minmax(0,1fr) 320px}}
 @media (max-width:1100px){.ask{grid-template-columns:minmax(0,1fr) 320px}.chats{grid-column:1/-1;position:static;max-height:none}.chats .list{display:flex;gap:6px;overflow-x:auto}.chats .it{width:auto;min-width:180px;max-width:240px}}
 /* «Обратите внимание — не из регламента» (организаторы 27.11) */
@@ -332,12 +333,12 @@ tr.rowlink:hover .chev{color:var(--ink)}
     <div class="bd"><p class="meta">Если один и тот же вопрос (другими словами тоже) задали столько раз за период, служба качества получает сигнал письмом и в аналитике.</p>
     <div class="setrow"><div class="fld">Период, дней<input id="setPeriod" type="number" min="1" max="90"></div>
       <div class="fld">Порог, раз<input id="setThreshold" type="number" min="2" max="50"></div></div></div></div>
-  <div class="card setcard"><div class="hd"><b>Обратите внимание — не из регламента</b><span class="sub">советы под ответом</span></div>
+  <div class="card setcard"><div class="hd"><b>Обратите внимание, не из регламента</b><span class="sub">советы под ответом</span></div>
     <div class="bd"><p class="meta">Ответ всегда строго по регламенту. Под ним может появиться отдельный блок «Обратите внимание, не из регламента» из двух источников. Первый: правила службы качества ниже. Если в вопросе есть слова-признаки правила (с любыми окончаниями), под ответом появится совет. Одна строка, одно правило: «слова-признаки через запятую → совет». Правила ниже заполнены для примера, служба качества меняет их сама, без программиста. Второй источник: внешние документы (закон, справка), подключённые ниже. Они ищутся отдельно и в ответ по регламенту не попадают.</p>
     <textarea id="setAspects" rows="7"></textarea>
     <div class="meta" style="margin-top:12px"><b>Подключённые внешние источники</b><div id="extList">…</div><div style="margin-top:6px">Добавить: «Документы» → «Загрузить», тип «Внешний источник». Подключение правовых баз по API (КонсультантПлюс, Гарант) в планах развития.</div></div></div></div>
   <div class="foot"><button class="btn" id="setSave">Сохранить</button><span class="meta" id="setMsg"></span></div>
-  <div class="card setcard" style="margin-top:24px"><div class="hd"><b>Демо-данные</b><span class="sub">перед показом</span></div>
+  <div class="card setcard"><div class="hd"><b>Демо-данные</b><span class="sub">перед показом</span></div>
     <div class="bd"><p class="meta">Очищает обращения, карточки знаний, журнал запросов, повторы, готовые ответы и список диалогов в этом браузере; решения по противоречиям возвращаются в «Ждут решения». Регламенты, загруженные документы и настройки остаются.</p>
     <button class="btn" id="resetDemo">Сбросить демо-данные</button> <span class="meta" id="resetMsg"></span></div></div>
 </section>
@@ -543,10 +544,10 @@ function render(r){
     // Fable 27.11 / заказчик: «вне регламентов» не должен быть тупиком — сотрудник может сам передать вопрос в СК
     if (r.outcome === "out_of_scope") h += `<div class="chips"><button class="chip" data-escalate="1" data-reason="сотрудник просит разобрать вопрос, который помощник счёл вне регламентов">Передать в службу качества</button></div>`;
   }
-  if (r.aspects?.length) h += `<div class="aspects"><div class="lbl">Обратите внимание — не из регламента</div>` + r.aspects.map(a => a.kind === "rule"
+  if (r.aspects?.length) h += `<div class="aspects"><div class="lbl">Обратите внимание, не из регламента</div>` + r.aspects.map(a => a.kind === "rule"
       ? `<div class="it">☞ ${esc(a.note)}<div class="src2">совет службы качества · признак в вопросе: «${esc(a.matched)}»</div></div>`
       : `<div class="it">📄 ${esc(a.text)}<div class="src2">внешний источник: ${esc(a.title)}${/^\d/.test(a.clause || "") ? ", п. " + esc(a.clause) : ""} · <button class="linkbtn" data-openext="${esc(a.doc_id)}">открыть</button></div></div>`).join("")
-    + `<div class="src2">Ответ выше — только по регламенту; этот блок — подсказка, на что ещё посмотреть в вашем случае.</div></div>`;
+    + `<div class="src2">Ответ выше только по регламенту, а этот блок подсказывает, на что ещё посмотреть в вашем случае.</div></div>`;
   const nt = r.trace?.length || 0;
   h += `<details class="how"><summary>Как найден ответ · ${nt} ${plural(nt, "шаг", "шага", "шагов")}</summary><ol>${(r.trace||[]).map(t => `<li>${esc(cap(t))}</li>`).join("")}</ol></details>
     <div class="foot meta"><span title="Время работы помощника на стенде (поиск + модель + проверки), без сети">на стенде ${String(r.seconds).replace(".", ",")} с</span>${r.client_seconds ? ` <span title="С учётом сети до стенда">(с сетью ${String(r.client_seconds).replace(".", ",")} с)</span>` : ""}${r.cached ? " · готовый ответ на повторный вопрос" : (r.answers||[]).length && r.answers.every(a => a.from_cache) ? " · из кэша" : ""}${r.tokens?.calls != null ? ` · вызовов модели ${r.tokens.calls}` : ""} · локальная модель · внешних запросов 0<span class="ml"></span>
