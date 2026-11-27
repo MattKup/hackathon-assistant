@@ -17,7 +17,7 @@ from app.answer.cache import norm_q
 from app.answer.core import SYSTEM as ANSWER_SYSTEM, answer as llm_answer, build_user
 from app.answer.understand import understand
 from app.chunking.clauses import ref_label
-from app.config import aliases as dept_aliases, dept_ids, domain, titles as dept_titles
+from app.config import qa_topics, aliases as dept_aliases, dept_ids, domain, titles as dept_titles
 from app.dialog.clarify import label, mentioned
 
 TASK_VERBS = re.compile(r"^\s*(?:пожалуйста,?\s*)?(сделай|напиши|составь|подготовь|проанализируй|переведи|сгенерируй|придумай|"
@@ -56,7 +56,8 @@ def scope_system():
             "мероприятий (ретроспектива, приёмка, доступы, статус сотрудников в проекте) — in_scope, даже если ответа в "
             "регламентах может не быть. Вопрос сотрудника о любых общих правилах работы в компании, даже если их нет в "
             "этой базе, — тоже in_scope: такой вопрос разбирает служба качества (заказчик 27.11: «просто сказать, что ответа "
-            "нет, — плохое решение»). false — только если вопрос о другом: экономика конкретной сделки сотрудника "
+            "нет, — плохое решение»)" + ("; в том числе темы, которые служба качества разбирает в этой компании: "
+            + ", ".join(qa_topics()) if qa_topics() else "") + ". false — только если вопрос о другом: экономика конкретной сделки сотрудника "
             "(какую маржу поставить, какая будет премия), текущие данные конкретной сделки или проекта (сколько денег осталось "
             "сейчас, какой статус у моей заявки), рынок и конкуренты, законы вообще, бытовое.")
 
