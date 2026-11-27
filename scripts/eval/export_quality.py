@@ -11,7 +11,8 @@ NAMES = {"single_dept": "Вопрос по одной дирекции", "needs_
          "same_across": "Одинаково во всех дирекциях", "complex_project": "Проект нескольких дирекций",
          "dont_know_dept": "Сотрудник не знает дирекцию", "caveat": "Ответ с оговоркой", "external_ref": "Отсылка к документу вне базы",
          "no_answer": "Нет в регламентах → письмо в службу качества", "out_of_scope": "Не про регламенты → отказ",
-         "task_request": "«Сделай за меня» → отказ", "find_document": "Где регламент"}
+         "task_request": "«Сделай за меня» → отказ", "find_document": "Где регламент",
+         "differs": "Правила дирекций различаются → уточнение", "single": "Ответ в одной дирекции", "partial": "Ответ с оговоркой"}
 
 
 def main(runs_repo, *ids):
@@ -33,7 +34,8 @@ def main(runs_repo, *ids):
         for k, v in m.get("by_class", {}).items():
             ok, tot = map(int, v.split("/"))
             cls[NAMES.get(k, k)] = {"ok": ok, "total": tot}
-        out.append({"id": d.name, "date": d.name[:8], "time_utc": d.name[9:15], "note": note,
+        st = meta.get("started_utc") or d.name            # дата — когда прогон шёл, а не когда поставлен в очередь (Fable 27.11)
+        out.append({"id": d.name, "date": st[:8], "time_utc": st[9:15], "note": note,
                     "commit": (meta.get("solution_commit") or "")[:7], "questions": m["questions"],
                     "outcome_ok": m["outcome_ok"], "extra_clarify": m.get("extra_clarify", 0),
                     "cite_hit": m.get("cite_hit"), "cite_total": (m.get("cite_hit") or 0) + (m.get("cite_miss") or 0),

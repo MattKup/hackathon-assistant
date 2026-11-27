@@ -33,6 +33,11 @@ def norm(s):
     return re.sub(r"\s+", " ", s).strip(" .;:")
 
 
+def _loose(s):
+    """Слова подряд без знаков препинания и маркеров списка: «обязан: • подготовить» = «обязан подготовить»."""
+    return " ".join(re.findall(r"\w+", norm(s)))
+
+
 def build_user(question, windows, dept_label, terms=""):
     parts = []
     for i, w in enumerate(windows, 1):
@@ -94,7 +99,8 @@ def _has_abbr(a, text):
 def _role_re(role):
     """Фраза роли подряд, по основам слов: «Руководитель проекта» ≠ «Руководитель отдела управления проектами»."""
     words = [w for w in re.findall(r"[а-яё]+", norm(role)) if len(w) > 2]
-    return re.compile(r"(?<![а-яё])" + r"[а-яё]*(?:[\s-]+[а-яё]{1,2})?[\s-]+".join(re.escape(w[:5]) for w in words) + r"[а-яё]*") if words else None
+    # основа — слово без последних 3 букв, но не короче 5: «спецификатор» ≠ «специалист» (Fable 27.11), «руководитель» = «руководителя»
+    return re.compile(r"(?<![а-яё])" + r"[а-яё]*(?:[\s-]+[а-яё]{1,2})?[\s-]+".join(re.escape(w[:max(5, len(w) - 3)]) for w in words) + r"[а-яё]*") if words else None
 
 
 def _has_role(role, text):
@@ -107,7 +113,11 @@ PERSON = re.compile(r"руковод|менеджер|архитект|дире�
 
 
 def _present(name, text):
-    for n in GROUPS.get(name, {name}) | {name}:
+    names = GROUPS.get(name, {name}) | {name}
+    for k, v in DOC_ABBR.items():               # расшифровка из текста документов (Г12): «SS» = «Менеджер по продаже решений»
+        if k in names or norm(v) in {norm(x) for x in names}:
+            names = names | {k, v}
+    for n in names:
         if (_has_abbr(n, text) if n.isupper() or len(n) <= 4 else _has_role(n, text)):
             return True
     return False
@@ -231,7 +241,10 @@ def check(raw, windows, question=""):
                 fixed = repair_quote(st["quote"], w["text"])
                 if fixed:
                     st = {**st, "quote": fixed, "quote_repaired": True}
-            if not st.get("quote") or norm(st["quote"]) not in norm(w["text"]):
+            if st.get("quote") and norm(st["quote"]) not in norm(w["text"]) and len(_loose(st["quote"]).split()) >= 4 \
+                    and _loose(st["quote"]) in _loose(w["text"]):
+                st = {**st, "quote_loose": True}     # те же слова подряд, без маркеров списка и знаков (Fable 27.11: v4_052, 099)
+            elif not st.get("quote") or norm(st["quote"]) not in norm(w["text"]):
                 reason = "quote_not_verbatim"
             else:
                 nums_step = set(NUM.findall(st.get("text", "") + " " + st.get("deadline", "")))

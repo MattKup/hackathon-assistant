@@ -41,6 +41,9 @@ PER_DEPT = 18     # фрагментов на дирекцию в контекс
 CLARIFY_FLOOR = 0.15      # документ считается «с опорой», если его лучший скор ≥ max(FLOOR, RATIO × лучший общий)
 CLARIFY_RATIO = 0.3
 DOC_WORDS = re.compile(r"документ|регламент|раздел|пункт|правил|описан|прописан|расписан|написан|указан|изложен|где\s+(у\s+нас\s+)?(про|найти|посмотреть|почитать)\b", re.I)  # q042: «откуда скачать эксель» — не «где описано»
+DOC_ASK = re.compile(r"\bгде\b|\bв\s+как\w*\s+(документ|регламент|раздел|пункт)|\bкак\w*\s+(документ|регламент|раздел)\w*\s+"
+                     r"(описыва|регулир|регламентир|устанавлива|определя)|\bчто\s+регламентир|\bкакой\s+(документ|регламент)",
+                     re.I)   # «где описано» — только при вопросе о месте (Fable 27.11: «сформировать передаточный документ» уходил в «где описано»)
 DOC_RATIO = 0.25           # «где описано»: документ называем, если его пункт не слабее четверти лучшего (q208 — 0,08; q206 — второй документ ИБ)
 import os as _os
 DEPT_HINT = re.compile(r"дирекц|департамент|подразделен|отдел|направлени|department|directorate|division|безопасн|цифров|"
@@ -910,7 +913,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         tr.append("Вопрос размытый — предлагаю близкие темы из регламентов")
         return _ask_turn(session, "topic", question, "Уточните, о чём вопрос:", topics + [ASK_SEND], tr, hits)
 
-    if (intent == "find_document" and DOC_WORDS.search(question)) or (not intent and FIND_DOC.search(question)):
+    if (intent == "find_document" and DOC_ASK.search(question)) or (not intent and FIND_DOC.search(question)):
         if top_refs(hits):
             ext = top_refs(hits)
             tr.append("Вопрос о том, где описано; найденный пункт отсылает к документу, которого нет в базе")

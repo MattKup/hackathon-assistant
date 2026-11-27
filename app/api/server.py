@@ -228,6 +228,10 @@ class App:
         if hints is not None:
             s["hints"] = bool(hints)                # Г15 (опция): «проверьте также п. X» — соседние пункты с исключением
         q = question
+        if not (q or "").strip() and (choice is None or not s.get("pending")):
+            # кнопка из старого диалога после перезапуска сервера или пустой вопрос — не создавать пустое обращение (Fable 27.11)
+            return {"session": sid, "outcome": "stale", "text": "Этот диалог устарел — задайте вопрос заново.", "answers": [],
+                    "options": [], "trace": [], "seconds": 0, "tokens": {}, "route": None, "documents": [], "external_refs": []}
         if choice is not None and s["pending"] and s.get("pending_kind") == "ask":
             q = s["pending"]                         # ответ на уточняющий вопрос (условие или тема)
             s["ask_reply"] = next((o["label"] for o in s["pending_options"] if o["doc_id"] == choice), choice)
@@ -245,6 +249,8 @@ class App:
             s["complex"] = False
             s.pop("ask", None)
         elif q:
+            s["docs"] = []                           # новый вопрос — заново по всем дирекциям (Fable 27.11: выбранная ранее
+                                                     # дирекция «залипала», и новый вопрос искался только в ней)
             s["complex"] = False
             s["clarifications"] = 0                  # бюджет уточнений — на вопрос, а не на весь чат (Fable К1)
             s.pop("ask", None)                       # кэш ответов по дирекциям не сбрасываем: он привязан к тексту вопроса,
@@ -452,8 +458,18 @@ def make_handler(app):
                     out["session"] = sid
                     return self._json(200, out)
                 if self.path == "/api/admin/reset-demo":   # очистить обращения, карточки, журнал (демо)
-                    app.store.db.executescript("delete from cases; delete from mails; delete from practices;")
+                    app.store.db.executescript("delete from cases; delete from mails; delete from practices; delete from drafts; "
+                                               "delete from discrepancies;")
                     app.store.db.commit()
+                    # Fable 27.11: сброс демо должен возвращать и решения по противоречиям, и счётчик повторов
+                    for sql in ("delete from escalation_log", "delete from repeat_signals",
+                                "update conflict_pairs set status='candidate', decided_by=null, decided_at=null, comment=null"):
+                        try:
+                            app.conflict_reg.db.execute(sql) if "conflict" in sql else app.store.db.execute(sql)
+                        except Exception:
+                            pass
+                    app.store.db.commit(); app.conflict_reg.db.commit()
+                    app.conflicts = None                  # перечитать подтверждённые пары при следующем вопросе
                     app.log.write_text("")
                     app.sessions.clear()
                     app.rebuild()
