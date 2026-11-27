@@ -6,8 +6,10 @@
 Иначе адреса из окружения: TEI_EMBED_URL, TEI_RERANK_URL, LLM_BASE_URL, MAIL_SMTP_HOST/PORT, MAILPIT_API.
 """
 import argparse
+import dataclasses
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -25,7 +27,7 @@ from app.escalation.repeats import Repeats
 from app.escalation.process import practice_windows, process_replies
 from app.escalation.store import Store
 from app.ingest.upload import Uploads, parse_multipart
-from app.pipeline import build_index, doc_abbr, load_conflicts, run_turn
+from app.pipeline import OFF, build_index, doc_abbr, load_conflicts, run_turn
 from app.registry.build import run as build_registry
 from app.search.bm25 import BM25
 from app.search.vectors import VectorStore
@@ -85,6 +87,7 @@ class App:
             self.registry.append(doc)
             self.windows += ws
         self.sessions = {}
+        self.live = {}                 # идущие ходы: rid → шаги работы (для показа ожидания в вебе)
         self.mock = mock
         self.qa_address = os.environ.get("QA_EMAIL", "quality@example.test")   # в демо — не реальный адрес СК
         self.smtp = (os.environ.get("MAIL_SMTP_HOST", "127.0.0.1"), int(os.environ.get("MAIL_SMTP_PORT", "1025")))
@@ -236,9 +239,77 @@ class App:
             return [{**h, "score": round(min(0.99, h["score"] / top), 3)} for h in hits]
         return self.hy.search(q, k=k, allowed=allowed)[0]
 
+    # --- быстрый ответ (27.11): готовый ход на точный повтор вопроса, пока база не менялась ---
+    FAST_OUTCOMES = ("answer", "answer_with_caveat", "clarify", "document")
+    FAST_NOTE = "Такой вопрос уже задавали, регламенты с тех пор не менялись — показываю проверенный ответ без повторного поиска"
+
+    def _turn_key(self, q, s):
+        """Ключ готового хода: точный текст вопроса (с точностью до пробелов), режимы диалога, состав базы и настройки СК.
+        Версия индекса — внутри answer_cache.key: загрузка документа, карточка СК, решение по противоречию, сброс демо
+        сбрасывают и готовые ходы."""
+        try:
+            stamp = (self.data / "settings.json").stat().st_mtime_ns
+        except OSError:
+            stamp = 0
+        return self.answer_cache.key("turn", re.sub(r"\s+", " ", q).strip(), bool(s.get("no_clarify")), bool(s.get("hints")),
+                                     bool(s.get("no_deep")), stamp, tuple(sorted(d["doc_id"] for d in self.registry)))
+
+    def _turn(self, q, s, fresh):
+        """Ход диалога; для нового вопроса (не выбор и не продолжение) — сначала готовый ход. Сохраняются только ходы без
+        побочных действий: ответ, ответ с оговоркой, уточнение дирекции, «где описано». Письма в СК, уточнение условия,
+        отказы и сбои модели каждый раз считаются заново. Выключатель: HK_OFF=FAST."""
+        key = self._turn_key(q, s) if fresh and "FAST" not in OFF else None
+        hit = self.answer_cache.get(key) if key else None
+        if hit:
+            if hit["cache"]:
+                s["cache"] = hit["cache"]            # ответы по дирекциям для хода после уточнения — как при обычном ходе
+            t = hit["turn"]
+            return dataclasses.replace(t, trace=[self.FAST_NOTE] + list(t.trace),
+                                       tokens={"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "by_step": {}}), True
+        if getattr(self, "conflicts", None) is None:
+            self.conflicts = load_conflicts(self.windows, self.conflict_reg.confirmed())   # только подтверждённые СК
+            self.index = build_index(self.windows)                  # пункты по номеру — для агентного прохода
+        if getattr(self, "_abbr_n", None) != len(self.windows):   # сокращения документов — пересчёт при изменении базы
+            self.abbr, self._abbr_n = doc_abbr(self.windows, self.registry), len(self.windows)
+        key = self._turn_key(q, s) if key else None    # версия индекса на начало хода: пересборка во время хода — ход не сохраняем
+        turn = run_turn(q, [d for d in self.registry if not is_external(d)], self.search, self.llm, session=s, answer_cache=self.answer_cache,
+                        conflicts=self.conflicts, index=self.index, abbr=self.abbr)   # s хранит кэш ответов по дирекциям для второго хода
+        if key and turn.outcome in self.FAST_OUTCOMES and not (turn.route or {}).get("email") and not s.get("ask") \
+                and not any(a["result"].get("error") or (a.get("meta") or {}).get("error") for a in turn.answers) \
+                and key == self._turn_key(q, s):
+            c = s.get("cache") if turn.outcome == "clarify" else None
+            if turn.outcome != "clarify" or (c and c.get("q") == q):
+                self.answer_cache.put(key, {"turn": turn, "cache": c})
+        return turn, False
+
+    def warm(self, limit=30):
+        """Прогрев при запуске: последние вопросы из журнала стенда прогоняются заранее (в фоне, по одному), чтобы на
+        показе они отвечались сразу. Идёт тем же путём, что и обычный вопрос, но без диалога и без писем: ход с письмом
+        в СК не сохраняется и письмо не отправляется (обращения создаёт только ask). Выключатель: HK_OFF=WARM."""
+        qs = []
+        try:
+            for line in reversed(self.log.read_text().splitlines()):
+                r = json.loads(line)
+                q = (r.get("q") or "").strip()
+                if q and r.get("outcome") in self.FAST_OUTCOMES and q not in qs:
+                    qs.append(q)
+                if len(qs) >= limit:
+                    break
+        except (OSError, ValueError):
+            pass
+        done = 0
+        for q in qs:
+            try:
+                self._turn(q, {"docs": [], "clarifications": 0, "history": [], "pending": None}, True)
+                done += 1
+            except Exception:
+                pass
+        return done
+
     # --- ход диалога ---
-    def ask(self, sid, question, choice=None, employee="", no_clarify=None, hints=None):
+    def ask(self, sid, question, choice=None, employee="", no_clarify=None, hints=None, rid=None):
         s = self.sessions.setdefault(sid, {"docs": [], "clarifications": 0, "history": [], "pending": None})
+        fresh = False
         if no_clarify is not None:
             s["no_clarify"] = bool(no_clarify)      # режим «без уточнения дирекции»: сразу ответы по всем дирекциям
         if hints is not None:
@@ -269,16 +340,17 @@ class App:
                                                      # дирекция «залипала», и новый вопрос искался только в ней)
             s["complex"] = False
             s["clarifications"] = 0                  # бюджет уточнений — на вопрос, а не на весь чат (Fable К1)
+            fresh = True
             s.pop("ask", None)                       # кэш ответов по дирекциям не сбрасываем: он привязан к тексту вопроса,
                                                      # повтор вопроса в том же чате отвечается сразу (владелец 27.11: 19 с)
         t0 = time.time()
-        if getattr(self, "conflicts", None) is None:
-            self.conflicts = load_conflicts(self.windows, self.conflict_reg.confirmed())   # только подтверждённые СК
-            self.index = build_index(self.windows)                  # пункты по номеру — для агентного прохода
-        if getattr(self, "_abbr_n", None) != len(self.windows):   # сокращения документов — пересчёт при изменении базы
-            self.abbr, self._abbr_n = doc_abbr(self.windows, self.registry), len(self.windows)
-        turn = run_turn(q, [d for d in self.registry if not is_external(d)], self.search, self.llm, session=s, answer_cache=self.answer_cache,
-                        conflicts=self.conflicts, index=self.index, abbr=self.abbr)   # s хранит кэш ответов по дирекциям для второго хода
+        if rid:
+            self.live[rid] = s["_live"] = []         # ход работы для веба: /api/progress?rid=…
+        try:
+            turn, cached = self._turn(q, s, fresh)
+        finally:
+            s.pop("_live", None)
+            self.live.pop(rid, None)
         s["last_q"] = turn.question or q             # для продолжений «а по <дирекция>?»
         aspects = []
         if turn.outcome in SHOW_FOR:                 # «Обратите внимание — не из регламента» (организаторы 27.11, вариант А)
@@ -292,7 +364,8 @@ class App:
                     pass
         out = {"outcome": turn.outcome, "text": turn.text, "tokens": turn.tokens, "trace": turn.trace, "route": turn.route,
                "documents": turn.documents, "external_refs": turn.external_refs,
-               "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": [], "aspects": aspects}
+               "options": [{"id": o["doc_id"], "label": o["label"]} for o in turn.options], "answers": [], "aspects": aspects,
+               "cached": cached}
         for a in turn.answers:
             r = a["result"]
             out["answers"].append({"label": a["label"], "verdict": r["verdict"], "summary": r["summary"], "caveat": r.get("caveat", ""),
@@ -414,6 +487,10 @@ def make_handler(app):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 return self.wfile.write(body)
+            if self.path.startswith("/api/progress"):      # что помощник делает сейчас — веб опрашивает, пока ждёт ответ
+                from urllib.parse import parse_qs, urlparse
+                rid = (parse_qs(urlparse(self.path).query).get("rid") or [""])[0]
+                return self._json(200, {"steps": list(app.live.get(rid) or [])})
             if self.path == "/api/health":
                 return self._json(200, {"ok": True, "mock": app.mock, "windows": len(app.windows)})
             if self.path == "/api/documents":
@@ -482,7 +559,8 @@ def make_handler(app):
             try:
                 if self.path == "/api/ask":
                     sid = b.get("session") or uuid.uuid4().hex
-                    out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""), b.get("no_clarify"), b.get("hints"))
+                    out = app.ask(sid, b.get("question", ""), b.get("choice"), b.get("employee", ""), b.get("no_clarify"), b.get("hints"),
+                                  str(b.get("rid") or "")[:64] or None)
                     out["session"] = sid
                     return self._json(200, out)
                 if self.path == "/api/admin/reset-demo":   # очистить обращения, карточки, журнал (демо)
@@ -588,6 +666,8 @@ def main():
                 except Exception:
                     pass
         threading.Thread(target=loop, daemon=True).start()
+    if "WARM" not in OFF and "FAST" not in OFF:      # прогрев частых вопросов из журнала — в фоне, запуск не задерживает
+        threading.Thread(target=lambda: print(f"warm: {app.warm()} вопросов готовы", flush=True), daemon=True).start()
     print(f"assistant on :{a.port} mock={a.mock} windows={len(app.windows)}", flush=True)
     ThreadingHTTPServer((a.host, a.port), make_handler(app)).serve_forever()
 
