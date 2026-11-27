@@ -27,3 +27,11 @@ class AbbrTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeptHintTest(unittest.TestCase):
+    def test_hint(self):
+        from app.pipeline import DEPT_HINT
+        self.assertIsNone(DEPT_HINT.search("Что предпринимает команда проекта, если не хватает исполнителей?"))
+        for q in ("У безопасников можно начать?", "In the technical department, who closes?", "А в ИБ как?", "Техдирекция: кто?"):
+            self.assertIsNotNone(DEPT_HINT.search(q), q)

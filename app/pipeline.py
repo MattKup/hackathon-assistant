@@ -43,6 +43,8 @@ CLARIFY_RATIO = 0.3
 DOC_WORDS = re.compile(r"документ|регламент|раздел|пункт|правил|описан|прописан|расписан|написан|указан|изложен|где\s+(у\s+нас\s+)?(про|найти|посмотреть|почитать)\b", re.I)  # q042: «откуда скачать эксель» — не «где описано»
 DOC_RATIO = 0.25           # «где описано»: документ называем, если его пункт не слабее четверти лучшего (q208 — 0,08; q206 — второй документ ИБ)
 import os as _os
+DEPT_HINT = re.compile(r"дирекц|департамент|подразделен|отдел|направлени|department|directorate|division|безопасн|цифров|"
+                       r"\bтех|\bиб\b|\bтд\b|дбр|\bуиб\b", re.I)   # Г18: в вопросе есть указание на подразделение
 OFF = set(filter(None, _os.environ.get("HK_OFF", "").split(",")))   # выключить гипотезы для замера: HK_OFF=G1,G3
 ON = set(filter(None, _os.environ.get("HK_ON", "").split(",")))     # включить экспериментальные: HK_ON=G8,G9,G10,G11
 OOS_SUPPORT = 0.5          # «вне регламентов» по разбору вопроса — только если в регламентах нет сильной опоры
@@ -394,6 +396,38 @@ def deep_pass(llm, question, dep, label_, ws, res, meta, search_fn, docs, index,
     res2, meta2 = cached_answer(llm, question, ws2, label_, answer_cache, hint, think)
     better = (VERDICT_RANK.get(res2["verdict"], 0), len(res2.get("steps", []))) > (VERDICT_RANK.get(res["verdict"], 0), len(res.get("steps", [])))
     return {"res": res2, "meta": meta2, "ws": ws2, "better": better, "added": len(extra), "why": why}
+
+
+def cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers=4):
+    """Г17 (v4 27.11: «в дирекции X не нашёл», хотя ответ там есть — 7 из 100): если в одной дирекции ответ нашёлся,
+    а в другой «нет ответа», агент ищет в ней то же правило формулировкой найденного ответа и отвечает ещё раз.
+    Модель по-прежнему отвечает только по пунктам своей дирекции; проверки кодом те же."""
+    found = [r for r in results if r["result"]["verdict"] in ("answer", "answer_with_caveat", "conflict")]
+    silent = [r for r in results if r["result"]["verdict"] == "no_answer" and r.get("windows")]
+    if not found or not silent:
+        return results
+    best = max(found, key=lambda r: (VERDICT_RANK.get(r["result"]["verdict"], 0), len(r["result"].get("steps", []))))
+    probe = " ".join([best["result"].get("summary", "")] + [st.get("text", "") for st in best["result"].get("steps", [])[:3]])[:400]
+    why = f"в дирекции «{best['label']}» ответ нашёлся — ищу то же правило здесь"
+
+    def again(r):
+        docs = [x for x in deep if by_id[x]["department"] == r["doc_id"]]
+        try:
+            d = deep_pass(llm, question, r["doc_id"], r["label"], r["windows"], {**r["result"], "missing": probe}, r["meta"],
+                          search_fn, docs, index, answer_cache, why)
+        except Exception as e:
+            r["meta"]["cross_error"] = str(e)[:120]
+            return r
+        if not d:
+            return r
+        r["meta"]["deep"] = {"why": why, "added": d["added"], "better": d["better"], "verdict2": d["res"]["verdict"]}
+        if d["better"]:
+            r = {**r, "result": split_discrepancy(d["res"]), "windows": d["ws"]}
+            r["meta"]["clauses_seen"] = [w["clause"] for w in d["ws"]]
+        return r
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        redo = dict(zip([id(r) for r in silent], ex.map(again, silent)))
+    return [redo.get(id(r), r) for r in results]
 
 
 def outcome_of(results):
@@ -758,7 +792,12 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             and not u.get("departments"):
         session["no_clarify"] = session["_nc_turn"] = True
         tr.append("Вы не знаете дирекцию — сравниваю ответы всех дирекций")
-    by_model = _docs_for(set(u.get("departments") or []), "" if "G4" not in OFF else u.get("stage", ""), registry)
+    model_deps = set(u.get("departments") or [])
+    if model_deps and "G18" not in OFF and not mentioned(question, registry) and not DEPT_HINT.search(question):
+        # Г18 (v4 27.11): модель угадывала дирекцию по словам-ролям («ДРП» → ДБРЦТ), хотя сотрудник её не называл, —
+        # тогда не было ни уточнения, ни ответов других дирекций
+        model_deps = set()
+    by_model = _docs_for(model_deps, "" if "G4" not in OFF else u.get("stage", ""), registry)
     named = (list(dict.fromkeys(mentioned(question, registry) + by_model)) if "G5" not in OFF
              else mentioned(question, registry) or by_model)
     if named:
@@ -949,6 +988,8 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         return {"doc_id": dep, "label": names.get(dep, dep), "result": res, "meta": meta, "windows": ws}
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(one, depts))
+    if not fixed and "G17" not in OFF and not session.get("no_deep"):
+        results = cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers)
     for r in results:
         res = r["result"]
         verdict = {"answer": "ответ", "answer_with_caveat": "ответ с оговоркой", "conflict": "противоречие",
