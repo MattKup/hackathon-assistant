@@ -672,12 +672,31 @@ def keep_doc_abbr(question, u, abbr, tr):
     return {**u, "queries": keep or [q_up]}
 
 
-def live(session, text):
-    """Ход работы для веба (быстрый ответ, 27.11): что помощник делает прямо сейчас. Только показ ожидания — в ответ,
-    трассу и решения не попадает; список читает сервер (/api/progress), пока идёт ход."""
+LIVE = {   # живые статусы хода работы (владелец 27.11: «в духе doc-intel»): формулировки чередуются, факты в них настоящие
+    "search": ["Понял вопрос, иду в регламенты", "Вопрос ясен, листаю регламенты", "Понял, о чём речь, ищу нужные пункты"],
+    "found": ["Нашёл: {ref}. Вчитываюсь", "Ближе всего {ref}, открываю и читаю", "Кажется, это {ref}. Читаю внимательно"],
+    "found_any": ["Нашёл пункты по теме, читаю", "Есть подходящие пункты, вчитываюсь"],
+    "answer": ["Пишу ответ{n}", "Собираю ответ{n}", "Готовлю ответ{n}"],
+    "dept_ok": ["{d}: ответ готов, цитаты сходятся с пунктом", "{d}: готово, всё сверено с текстом", "{d}: ответ собран и проверен"],
+    "dept_deep": ["{d}: перечитываю соседние пункты и ссылки", "{d}: первый ответ неполный, смотрю внимательнее",
+                  "{d}: ещё раз прохожу по пунктам рядом"],
+    "dept_none": ["{d}: прямого ответа в пунктах нет", "{d}: в этом регламенте об этом не сказано прямо"],
+    "cross": ["Проверяю, нет ли того же правила у другой дирекции", "Заглядываю в регламент соседней дирекции"],
+    "compare": ["Ответы есть у нескольких дирекций, сравниваю их", "Сверяю, одинаково ли правило в разных дирекциях"],
+}
+
+
+def live(session, kind, **kw):
+    """Ход работы для веба (быстрый ответ, 27.11): что помощник делает прямо сейчас. Только показ ожидания: в ответ,
+    трассу и решения не попадает; список читает сервер (/api/progress), пока идёт ход. kind — этап (LIVE), веб по нему
+    подставляет подстрочки, пока этап идёт долго."""
     steps = session.get("_live") if session else None
-    if steps is not None:
-        steps.append(text)
+    if steps is None:
+        return
+    import random
+    v = LIVE.get(kind)
+    steps.append(random.choice(v).format(**kw) if v else kind)
+    session["_live_kind"] = kind if v else ""
 
 
 def run_turn(question, registry, search_fn, llm, session=None, workers=4, answer_cache=None, conflicts=None, index=None, abbr=None):
@@ -827,7 +846,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     # исходная формулировка всегда в поиске: переписывание может увести в сторону (26.11: «заявка» → «РТЗ»)
     queries = list(dict.fromkeys([strip_departments(question, registry)] + [strip_departments(x, registry) for x in u["queries"]]))[:4]
     tr.append("Понял вопрос как: " + " · ".join(queries[1:] or queries))
-    live(session, "Понял вопрос — ищу пункты в регламентах")
+    live(session, "search")
     terms = "" if "G3" in OFF else "; ".join(queries[1:])
     if "G13" in ON:                                  # Г13: сработавшие пары словаря «слово → термин регламента»
         from app.answer.core import fired_pairs
@@ -913,8 +932,10 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
               f"в {len(deep)} {plural(len(deep), 'документе', 'документах', 'документах')}; {len(queries)} "
               f"{plural(len(queries), 'формулировка', 'формулировки', 'формулировок')}")
     if hits:
-        live(session, f"Ближе всего — {ref_label(hits[0])} ({dept_titles(registry).get(by_id[hits[0]['doc_id']]['department'], '')}); читаю найденные пункты"
-             if hits[0].get("doc_id") in by_id else "Нашёл пункты по теме; читаю их")
+        if hits[0].get("doc_id") in by_id:
+            live(session, "found", ref=f"{ref_label(hits[0])} ({dept_titles(registry).get(by_id[hits[0]['doc_id']]['department'], '')})")
+        else:
+            live(session, "found_any")
 
     def escalate_or_scope(results):
         """(4) Перед письмом — проверка «вопрос вообще про процессы компании?»."""
@@ -991,7 +1012,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
     else:
         depts = [dep for dep, sc in sorted(dept_best.items(), key=lambda kv: -kv[1]) if sc >= NO_SUPPORT][:MAX_DEPTS]
         tr.append(f"Готовлю ответ по каждой дирекции, где нашлись пункты: {len(depts)}")
-    live(session, "Готовлю ответ и сверяю цитаты с текстом пунктов" + (f" — по {len(depts)} дирекциям" if len(depts) > 1 else ""))
+    live(session, "answer", n=f" по {len(depts)} дирекциям" if len(depts) > 1 else "")
     # (2) комплексный проект: каждая дирекция отвечает за свою часть
     complex_ = len(depts) >= 2 and (session.get("complex") or len({by_id[d]["department"] for d in named}) >= 2)
 
@@ -1018,8 +1039,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
                    "missing": "ответ не получен из-за сбоя модели", "error": str(e)[:120]}
             meta = {"error": str(e)[:120]}
         why = needs_deep(res, dept_best.get(dep, 0)) if not session.get("no_deep") else ""
-        live(session, f"{names.get(dep, dep)}: " + ("добираю соседние пункты и пункты по ссылкам — проверяю ещё раз" if why else
-                                                      "прямого ответа нет" if res["verdict"] == "no_answer" else "ответ готов, цитаты сверены"))
+        live(session, "dept_deep" if why else "dept_none" if res["verdict"] == "no_answer" else "dept_ok", d=names.get(dep, dep))
         if why:
             try:
                 d = deep_pass(llm, q, dep, names.get(dep, dep), ws, res, meta, search_fn,
@@ -1043,7 +1063,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
         results = list(ex.map(one, depts))
     if not fixed and "G17" not in OFF and not session.get("no_deep"):
         if any(r["result"]["verdict"] != "no_answer" for r in results) and cross_targets(results, dept_best):
-            live(session, "Проверяю, нет ли того же правила в регламенте другой дирекции")
+            live(session, "cross")
         results = cross_pass(llm, question, results, search_fn, deep, by_id, index, answer_cache, workers, dept_best)
     for r in results:
         res = r["result"]
@@ -1080,7 +1100,7 @@ def _run_turn(question, registry, search_fn, llm, session, workers, answer_cache
             complex_ = True
             return _finish(answered, note)
     if len(answered) >= 2 and not session.get("no_clarify") and session.get("clarifications", 0) < 2:
-        live(session, "Ответ есть в нескольких дирекциях — сравниваю, одинаков ли он")
+        live(session, "compare")
         same, diff = (False, "") if "G9" in ON else answers_same(llm, question, answered)
         if same:
             tr.append(f"Ответ есть в регламентах {len(answered)} {plural(len(answered), 'дирекции', 'дирекций', 'дирекций')} и по сути одинаков — уточнять не нужно")

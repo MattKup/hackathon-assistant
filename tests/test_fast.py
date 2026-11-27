@@ -19,7 +19,7 @@ def make_app(llm, wins=WINS):
     a.data = Path(tempfile.mkdtemp())
     a.log = a.data / "journal.jsonl"
     a.registry, a.windows, a.llm = list(REG), list(wins), llm
-    a.answer_cache, a.live = AnswerCache(), {}
+    a.answer_cache, a.live, a.live_kind = AnswerCache(), {}, {}
     a.conflicts, a.index, a.abbr, a._abbr_n = [], {}, set(), len(wins)
     a.search = search_for(wins)
     return a
@@ -105,7 +105,10 @@ class LiveProgressTest(unittest.TestCase):
         steps = s["_live"]
         t = run_turn(Q, REG, search_for(WINS), FakeLLM({"Техническая дирекция": "answer", "ДБРЦТ": "answer"}), session=s)
         self.assertGreaterEqual(len(steps), 3)
-        self.assertTrue(any("сверяю цитаты" in x for x in steps))
+        from app.pipeline import LIVE
+        variants = {k: [v.split("{")[0] for v in vs] for k, vs in LIVE.items()}
+        self.assertTrue(any(x.startswith(tuple(variants["answer"])) for x in steps))   # этап «пишу ответ» показан одной из формулировок
+        self.assertTrue(all("—" not in x for x in steps))                               # без длинных тире (владелец 27.11)
         self.assertFalse(set(steps) & set(t.trace))              # показ ожидания — не часть трассы и не часть ответа
         self.assertNotIn("_live", s)
         self.assertEqual(run_turn(Q, REG, search_for(WINS), FakeLLM({"ДБРЦТ": "answer"}), session={}).outcome, "answer")   # без показа ожидания ход тот же

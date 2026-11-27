@@ -434,6 +434,18 @@ $("#newChat2").onclick = newChat;
 function add(html, who){ $("#empty")?.remove(); const d = document.createElement("div"); d.className = "m " + who;
   d.innerHTML = `<div class="av">${who === "bot" ? "П" : "Я"}</div><div class="body">${html}</div>`; $("#msgs").appendChild(d); d.scrollIntoView({block:"end", behavior:"smooth"}); return d; }
 
+// подстрочки, пока этап идёт дольше 2,5 с: только то, что на этом этапе действительно делается
+const LIVE_MORE = {
+  start: ["Вчитываюсь в формулировку", "Расшифровываю сокращения", "Прикидываю, о какой дирекции речь"],
+  search: ["Листаю регламенты", "Сравниваю похожие пункты", "Отбираю самые близкие"],
+  found: ["Читаю пункт целиком", "Смотрю, что рядом с ним"],
+  found_any: ["Читаю пункты", "Смотрю, что рядом"],
+  answer: ["Раскладываю по шагам", "Сверяю каждую цитату с текстом пункта", "Проверяю сроки и цифры", "Проверяю, кто за что отвечает", "Ещё секунду, перепроверяю"],
+  dept_deep: ["Перечитываю пункт ещё раз", "Смотрю пункты по ссылкам", "Сверяю цитаты заново"],
+  dept_ok: ["Жду ответ по остальным дирекциям"], dept_none: ["Жду ответ по остальным дирекциям"],
+  cross: ["Ищу то же правило в другом регламенте", "Сверяю цитаты"],
+  compare: ["Сопоставляю сроки и роли", "Смотрю, есть ли разница по существу"],
+};
 async function ask(question, choice, choiceLabel){
   if (!cur) newChat();
   if (!cur.title && question) cur.title = question.slice(0, 80);
@@ -443,15 +455,21 @@ async function ask(question, choice, choiceLabel){
   const t0 = performance.now();
   // ход работы: пока ответ готовится, показываем, что помощник делает сейчас (сервер отдаёт шаги по rid)
   const rid = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-  let shown = 0;
+  let shown = 0, since = performance.now(), kind = "start", fi = 0, base = "Разбираю вопрос и ищу в регламентах";
   const tick = setInterval(async () => {
+    if (!w.isConnected) return;
     const p = await fetch("/api/progress?rid=" + rid).then(x => x.json()).catch(() => null);
     const st = p?.steps || [];
-    if (st.length <= shown || !w.isConnected) return;
-    shown = st.length;
-    w.querySelector(".now").textContent = cap(st[st.length - 1]) + "…";
-    w.querySelector(".live").innerHTML = st.slice(0, -1).map(x => `<div>· ${esc(cap(x))}</div>`).join("");
-    w.scrollIntoView({block:"end"});
+    if (st.length > shown) {
+      shown = st.length; since = performance.now(); kind = p.kind || ""; fi = 0; base = cap(st[st.length - 1]);
+      w.querySelector(".now").textContent = base + "…";
+      w.querySelector(".live").innerHTML = st.slice(0, -1).map(x => `<div>· ${esc(cap(x))}</div>`).join("");
+      w.scrollIntoView({block:"end"});
+    } else if (performance.now() - since > 2500 && (LIVE_MORE[kind] || []).length) {
+      // этап идёт долго: подстрочка о том, что на этом этапе действительно происходит
+      const more = LIVE_MORE[kind]; since = performance.now();
+      w.querySelector(".now").textContent = base + ". " + more[fi++ % more.length] + "…";
+    }
   }, 500);
   const r = await api("/api/ask", {session, question, choice, employee, rid, no_clarify: !!$("#noClarify")?.checked, hints: !!$("#hints")?.checked}).catch(e => ({error:String(e)}));
   clearInterval(tick);

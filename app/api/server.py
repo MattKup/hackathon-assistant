@@ -88,6 +88,7 @@ class App:
             self.windows += ws
         self.sessions = {}
         self.live = {}                 # идущие ходы: rid → шаги работы (для показа ожидания в вебе)
+        self.live_kind = {}            # rid → сессия хода (только чтобы отдать текущий этап, _live_kind)
         self.mock = mock
         self.qa_address = os.environ.get("QA_EMAIL", "quality@example.test")   # в демо — не реальный адрес СК
         self.smtp = (os.environ.get("MAIL_SMTP_HOST", "127.0.0.1"), int(os.environ.get("MAIL_SMTP_PORT", "1025")))
@@ -346,11 +347,14 @@ class App:
         t0 = time.time()
         if rid:
             self.live[rid] = s["_live"] = []         # ход работы для веба: /api/progress?rid=…
+            self.live_kind[rid] = s
         try:
             turn, cached = self._turn(q, s, fresh)
         finally:
             s.pop("_live", None)
             self.live.pop(rid, None)
+            self.live_kind.pop(rid, None)
+            s.pop("_live_kind", None)
         s["last_q"] = turn.question or q             # для продолжений «а по <дирекция>?»
         aspects = []
         if turn.outcome in SHOW_FOR:                 # «Обратите внимание — не из регламента» (организаторы 27.11, вариант А)
@@ -490,7 +494,7 @@ def make_handler(app):
             if self.path.startswith("/api/progress"):      # что помощник делает сейчас — веб опрашивает, пока ждёт ответ
                 from urllib.parse import parse_qs, urlparse
                 rid = (parse_qs(urlparse(self.path).query).get("rid") or [""])[0]
-                return self._json(200, {"steps": list(app.live.get(rid) or [])})
+                return self._json(200, {"steps": list(app.live.get(rid) or []), "kind": (app.live_kind.get(rid) or {}).get("_live_kind", "")})
             if self.path == "/api/health":
                 return self._json(200, {"ok": True, "mock": app.mock, "windows": len(app.windows)})
             if self.path == "/api/documents":
