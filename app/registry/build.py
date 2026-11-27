@@ -48,7 +48,7 @@ def run(corpus, out):
             doc["status_reason"] = "0 окон"
         docs.append(doc)
         windows += ws
-    if os.environ.get("DOC_INTEL_URL") and os.environ.get("DOC_INTEL_API_TOKEN"):
+    if os.environ.get("CORPUS_PDF") == "1" and os.environ.get("DOC_INTEL_URL") and os.environ.get("DOC_INTEL_API_TOKEN"):   # только явно (distract-test): в корпусе хакатона лежит PDF задания — не регламент
         docs_pdf, wins_pdf = _pdfs(Path(corpus), out)
         docs += docs_pdf
         windows += wins_pdf

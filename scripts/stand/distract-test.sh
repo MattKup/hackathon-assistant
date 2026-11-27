@@ -22,4 +22,4 @@ pick tenderlov-demo/fixtures TENDF "Тендеры (архив)" $((N / 4))
 pick gret-prep/data/sources VEND "Документация вендоров" $((N - 2 * (N / 4)))
 echo "корпус: $(ls "$TMP/c" | grep -vc meta.json) документов (наших: $(ls "$INBOX_DIR/$CORPUS"/*.docx | wc -l))" | tee "$RUN_DIR/corpus.txt"
 ls "$TMP/c" | grep -v meta.json >> "$RUN_DIR/corpus.txt"
-INBOX_DIR="$TMP" "$PY" -I "$(dirname "$0")/../../scripts/eval/answer_eval.py" c "$EVAL"
+CORPUS_PDF=1 INBOX_DIR="$TMP" "$PY" -I "$(dirname "$0")/../../scripts/eval/answer_eval.py" c "$EVAL"
